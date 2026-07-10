@@ -13,7 +13,7 @@ from isaacsim.core.api.robots import Robot
 from isaacsim.core.prims import SingleXFormPrim
 from isaacsim.core.utils.transformations import get_relative_transform, pose_from_tf_matrix
 from isaacsim.core.utils.types import ArticulationAction
-from omni.isaac.core.controllers import BaseController
+from isaacsim.core.api.controllers.base_controller import BaseController
 from pxr import Usd, UsdGeom
 
 
