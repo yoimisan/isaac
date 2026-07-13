@@ -17,7 +17,7 @@ from isaacsim.core.api.controllers import BaseController
 from isaacsim.core.api.scenes import Scene
 from isaacsim.core.utils.types import JointsState, ArticulationAction
 from isaacsim.core.prims import SingleGeometryPrim
-from isaacsim.core.utils.transformations import get_relative_transform, pose_from_tf_matrix
+from isaacsim.core.utils.transformations import get_relative_transform, pose_from_tf_matrix, get_world_pose_from_relative
 from isaacsim.core.utils.extensions import enable_extension
 
 # Keep this script on the legacy World/BaseTask API.  The matching Franka
@@ -85,6 +85,28 @@ def sample_cube_pregrasp_pose(cube) -> CuRoboPose:
 
     return CuRoboPose.from_matrix(local_transform)
 
+def create_xform(
+    world: World,
+    prim_path: str,
+    name: str,
+    exist_ok: bool,
+    *,
+    position: np.ndarray = None,
+    orientation: np.ndarray = None,
+    translation: np.ndarray = None
+) -> SingleXFormPrim:
+    if world.scene.object_exists(name) and exist_ok:
+        world.scene.remove_object(name)
+    return world.scene.add(
+        SingleXFormPrim(
+            prim_path=prim_path,
+            name=name,
+            translation=translation,
+            orientation=orientation,
+            position=position
+        )
+    )
+
 
 def create_cube_pregrasp_frame(
     world,
@@ -96,16 +118,11 @@ def create_cube_pregrasp_frame(
     local_frame_pose = sample_cube_pregrasp_pose(cube)
     loginfo: str = f"Create local frame pose: {str(local_frame_pose.to_list())}."
     carb.log_info(loginfo)
-
-    if world.scene.object_exists(name) and exist_ok:
-        world.scene.remove_object(name)
-
-    return world.scene.add(SingleXFormPrim(
-        prim_path=prim_path,
-        name=name,
+    return create_xform(
+        world=world, prim_path=prim_path, exist_ok=exist_ok, name=name, 
         translation=local_frame_pose.position.squeeze(0).detach().cpu().numpy(),
         orientation=local_frame_pose.quaternion.squeeze(0).detach().cpu().numpy(),
-    ))
+    )
 
 def build_curobo_world_cfg(
     stage: Usd.Stage,
@@ -191,9 +208,13 @@ class Status(Enum):
     APPROACH=1 # Approach to pregrasp pose
     DEEP=2 # pregrasp to deep
     GRASP=3 # grasp (gripper close)
-    PLACE=4 # place to target
+    LIFT=4
+    PLACE=5 # place to target
+    RELEASES=6
+    RETURN=7 # return the arm to its episode-reset joint state
 
 class PnPController(BaseController):
+    _LIFT_OFFSET = 0.15
 
     def __init__(
         self,
@@ -234,10 +255,24 @@ class PnPController(BaseController):
             name="franka_tool_center"
         )
         self._rmp_right_gripper_to_tool_center = None
+        self._buffer_trajs: list[ArticulationAction] = None
 
         self._approach_start = False
-        self._buffer_trajs: list[ArticulationAction] = None
         self._approach_idx = None
+
+        self._lift_start = False
+        self._lift_target_position = None
+        self._lift_target_orientation = None
+
+        self._place_start = False
+        self._place_idx = None
+        self._place_target_position = None
+        self._release_started = False
+
+        self._return_start = False
+        self._return_idx = None
+        self._return_complete = False
+        self._reset_arm_positions = self._robot.get_joints_state().positions[self._isaac_arm_joint_indices].copy()
 
     
     def setup_curobo_motion_gen(self, scene: Scene, robot_prim_path: str, include_cube_in_collision: bool=True):
@@ -324,6 +359,33 @@ class PnPController(BaseController):
             for waypoint in joint_positions
         ]
 
+    def motion_plan_to_reset(self) -> list[ArticulationAction] | None:
+        """Plan a collision-free joint-space trajectory back to the episode-reset arm pose."""
+        isaac_state = self._robot.get_joints_state()
+        start_state = CuRoboJointState.from_position(
+            position=self.tensor_args.to_device([isaac_state.positions[self._isaac_arm_joint_indices]]),
+            joint_names=self._curobo_joint_names,
+        )
+        goal_state = CuRoboJointState.from_position(
+            position=self.tensor_args.to_device([self._reset_arm_positions]),
+            joint_names=self._curobo_joint_names,
+        )
+        result = self._motion_gen.plan_single_js(start_state, goal_state)
+        if not result.success.item():
+            carb.log_warn("CuRobo failed to generate a return trajectory.")
+            return None
+
+        positions = result.get_interpolated_plan().get_ordered_joint_state(self._curobo_joint_names).position
+        if positions.ndim == 3:
+            positions = positions.squeeze(0)
+        return [
+            ArticulationAction(
+                joint_positions=waypoint.detach().cpu().numpy(),
+                joint_indices=self._isaac_arm_joint_indices,
+            )
+            for waypoint in positions
+        ]
+
     def calibrate_rmpflow_tool_center_transform(self) -> None:
         """Measure the fixed RMPflow right_gripper-to-USD-tool_center transform."""
         active_joint_indices = [
@@ -337,6 +399,40 @@ class PnPController(BaseController):
         world_to_tool = pose_to_matrix(tool_position, tool_orientation)
         self._rmp_right_gripper_to_tool_center = np.linalg.inv(world_to_rmp) @ world_to_tool
     
+    def get_rmp_right_gripper_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        active_joint_subset = self._articulation_rmpflow.get_active_joints_subset()
+        active_joint_positions = active_joint_subset.get_joint_positions()
+        return self._rmpflow.get_end_effector_pose(active_joint_positions)
+
+    def create_target_cube_prim(self, exist_ok: bool = True, prim_path: str="/World/TargetCube") -> SingleXFormPrim:
+        position, orientation = self._world.scene.get_object("target_region").get_world_pose()
+        target_position = position + np.array([0, 0, self._cube.get_size()/2])
+        return create_xform(
+            self._world, prim_path, "target_cube", exist_ok, 
+            position=target_position, orientation=orientation
+        )
+    def create_target_tool_center_prim(self, target_cube_prim: Optional[SingleXFormPrim]=None) -> SingleXFormPrim:
+        relative_position, relative_orientation = pose_from_tf_matrix(get_relative_transform(
+            source_prim=self._tool_center_prim.prim,
+            target_prim=self._cube.prim
+        ))
+
+        if target_cube_prim is None:
+            target_cube_prim = self.create_target_cube_prim()
+        
+        position, orientation = get_world_pose_from_relative(
+            coord_prim=target_cube_prim.prim,
+            relative_translation=relative_position,
+            relative_orientation=relative_orientation
+        )
+
+        target_tool_center_prim = create_xform(
+            self._world, "/World/TargetToolCenter", "target_tool_center", True,
+            position=position, orientation=orientation
+        )
+        return target_tool_center_prim
+
+
     def attach_cube_to_curobo_world(self):
         world_cfg = build_curobo_world_cfg(
             self._world.stage,
@@ -410,22 +506,11 @@ class PnPController(BaseController):
                 self._approach_idx = len(self._buffer_trajs) - 1
             action = self._buffer_trajs[self._approach_idx]
             self._approach_idx += 1
-                
-            # # The frame is a child of the dynamic cube, so its world pose changes
-            # # immediately with the cube and becomes RMPflow's target next step.
-            # self._rmpflow.set_end_effector_target(
-            #     target_position=target_position,
-            #     target_orientation=target_orientation,
-            # )
-            # self._rmpflow.update_world()
-            # action = self._articulation_rmpflow.get_next_articulation_action()
-            # self._robot._gripper.open()
-
-
 
             tool_center_position, _ = self._tool_center_prim.get_world_pose()
             if np.linalg.norm(tool_center_position - self._approach_target_position) <= self._approach_tolerance:
                 self._status = Status.DEEP
+                self._buffer_trajs = None
         
         elif self._status == Status.DEEP:
             desired_tool_transform = pose_to_matrix(
@@ -448,13 +533,87 @@ class PnPController(BaseController):
                 self._status = Status.GRASP
         
         elif self._status == Status.GRASP:
-            self._robot._gripper.close()
+            self._robot.gripper.close()
             self.attach_cube_to_curobo_world()
-            self._status = Status.HANG
+            self._status = Status.LIFT
+        
+        elif self._status == Status.LIFT:
+            if not self._lift_start:
+                rmp_position, rmp_orientation = self.get_rmp_right_gripper_pose()
+                self._lift_start = True
+                self._lift_target_position = rmp_position + np.array([0.0, 0.0, self._LIFT_OFFSET])
+                _, self._lift_target_orientation = pose_from_tf_matrix(
+                    pose_to_matrix(rmp_position, rmp_orientation)
+                )
+
+            self._rmpflow.set_end_effector_target(
+                target_position=self._lift_target_position,
+                target_orientation=self._lift_target_orientation,
+            )
+            self._rmpflow.update_world()
+            action = self._articulation_rmpflow.get_next_articulation_action()
+
+            rmp_position, _ = self.get_rmp_right_gripper_pose()
+            if np.linalg.norm(rmp_position - self._lift_target_position) <= self._approach_tolerance:
+                self._status = Status.PLACE
+        
+        elif self._status == Status.PLACE:
+            if not self._place_start:
+                target_prim = self.create_target_tool_center_prim()
+                self._place_target_position, _ = target_prim.get_world_pose()
+                local_position, local_quaternion = pose_from_tf_matrix(get_relative_transform(
+                    source_prim=target_prim.prim,
+                    target_prim=self._base_prim.prim,
+                ))
+                self._buffer_trajs = self.motion_plan(base_position=local_position, base_quaternion=local_quaternion)
+                if self._buffer_trajs is None:
+                    raise RuntimeError("CuRobo failed to generate a place trajectory.")
+                self._place_idx = 0
+                self._place_start = True
+            
+            if self._place_idx >= len(self._buffer_trajs):
+                self._place_idx = len(self._buffer_trajs) - 1
+            
+            action = self._buffer_trajs[self._place_idx]
+            self._place_idx += 1
+
+            tool_center_position, _ = self._tool_center_prim.get_world_pose()
+            if np.linalg.norm(tool_center_position - self._place_target_position) <= self._approach_tolerance:
+                self._status = Status.RELEASES
+
+        elif self._status == Status.RELEASES:
+            if not self._release_started:
+                self._robot.gripper.open()
+                self.deattach_cube_from_curobo_world()
+                self._release_started = True
+            self._status = Status.RETURN
+
+        elif self._status == Status.RETURN:
+            if not self._return_start:
+                self._buffer_trajs = self.motion_plan_to_reset()
+                if self._buffer_trajs is None:
+                    raise RuntimeError("CuRobo failed to generate a return trajectory.")
+                self._return_idx = 0
+                self._return_start = True
+
+            if self._return_idx >= len(self._buffer_trajs):
+                self._return_idx = len(self._buffer_trajs) - 1
+            action = self._buffer_trajs[self._return_idx]
+            self._return_idx += 1
+
+            arm_positions = self._robot.get_joints_state().positions[self._isaac_arm_joint_indices]
+            if np.linalg.norm(arm_positions - self._reset_arm_positions) <= self._approach_tolerance:
+                self._return_complete = True
+                self._status = Status.HANG
+
 
 
 
         return action
+
+    def is_complete(self) -> bool:
+        """Return True once the cube was released and the arm returned to its reset pose."""
+        return self._return_complete
 
 class PickPlaceTask(BaseTask):
     CUBE_SIZE = 0.05
@@ -585,6 +744,9 @@ def main():
                 articulation_controller.apply_action(action)
 
         world.step(render=True)
+        if world.is_playing() and controller.is_complete() and task.is_done():
+            carb.log_info("Pick-and-place completed; the arm returned to its reset pose.")
+            world.pause()
 
 if __name__ == '__main__':
     try:
