@@ -223,7 +223,7 @@ class PnPController(BaseController):
         cube: DynamicCuboid,
         world: World,
         physics_dt: float = 1.0 / 60.0,
-        approach_tolerance: float = 0.01,
+        approach_tolerance: float = 0.02,
     ):
         BaseController.__init__(self, name)
         self._robot = robot
@@ -577,8 +577,9 @@ class PnPController(BaseController):
             action = self._buffer_trajs[self._place_idx]
             self._place_idx += 1
 
-            tool_center_position, _ = self._tool_center_prim.get_world_pose()
-            if np.linalg.norm(tool_center_position - self._place_target_position) <= self._approach_tolerance:
+            cube_position, _ = self._cube.get_world_pose()
+            target_cube_position, _ = self._world.scene.get_object("target_cube").get_world_pose()
+            if np.linalg.norm(cube_position - target_cube_position) <= self._approach_tolerance:
                 self._status = Status.RELEASES
 
         elif self._status == Status.RELEASES:
