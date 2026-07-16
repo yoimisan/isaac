@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from enum import Enum
-
+import carb
 import numpy as np
 from isaacsim.core.api import World
 from isaacsim.core.api.controllers import BaseController
@@ -21,20 +20,13 @@ from isaacsim.robot_motion.motion_generation.interface_config_loader import load
 from isaacsim.robot_motion.motion_generation.lula import RmpFlow
 
 from pick_place.curobo_planner import CuroboPlanner
-from pick_place.geometry import create_cube_pregrasp_frame, create_xform, pose_to_matrix
-
-
-class PickPlacePhase(Enum):
-    """Execution phases for one pick-and-place episode."""
-
-    IDLE = 0
-    APPROACH = 1
-    DESCEND = 2
-    GRASP = 3
-    LIFT = 4
-    PLACE = 5
-    RELEASE = 6
-    RETURN = 7
+from pick_place.geometry import create_xform, pose_to_matrix
+from pick_place.states import (
+    ApproachState,
+    PickPlacePhase,
+    PnPState,
+    WaitForStableState,
+)
 
 
 class PnPController(BaseController):
@@ -65,23 +57,23 @@ class PnPController(BaseController):
         self._reset_phase_state()
 
     def reset(self) -> None:
-        """Create a cube-local pre-grasp frame and begin the approach phase."""
+        """Reset state-local data and begin a fresh approach."""
         super().reset()
         self._reset_phase_state()
+        self._rmpflow.reset()
         self._rmpflow.set_robot_base_pose(
             robot_position=self._default_robot_position,
             robot_orientation=self._default_robot_orientation,
         )
-        self._pregrasp_prim = create_cube_pregrasp_frame(self._world, self._cube, exist_ok=True)
         self._calibrate_rmpflow_tool_center_transform()
-        self._phase = PickPlacePhase.APPROACH
+        self._transition_to(PickPlacePhase.APPROACH)
 
     def forward(self) -> ArticulationAction | None:
         """Return the next articulation action for the active phase."""
         if self._phase is PickPlacePhase.IDLE:
             return None
-        if self._phase is PickPlacePhase.APPROACH:
-            return self._forward_approach()
+        if self._phase in self._state_objects:
+            return self._forward_state_object()
         if self._phase is PickPlacePhase.DESCEND:
             return self._forward_descend()
         if self._phase is PickPlacePhase.GRASP:
@@ -101,7 +93,7 @@ class PnPController(BaseController):
         return self._return_complete
 
     def _reset_phase_state(self) -> None:
-        self._pregrasp_prim: SingleXFormPrim | None = None
+        self._phase = PickPlacePhase.IDLE
         self._default_robot_position, self._default_robot_orientation = self._robot.get_world_pose()
         base_link = self._planner.robot_config["kinematics"]["base_link"]
         self._base_prim = SingleXFormPrim(
@@ -115,10 +107,6 @@ class PnPController(BaseController):
         self._rmp_right_gripper_to_tool_center: np.ndarray | None = None
         self._trajectory: list[ArticulationAction] | None = None
 
-        self._approach_started = False
-        self._approach_index: int | None = None
-        self._approach_target_position: np.ndarray | None = None
-        self._approach_target_orientation: np.ndarray | None = None
         self._lift_started = False
         self._lift_target_position: np.ndarray | None = None
         self._lift_target_orientation: np.ndarray | None = None
@@ -130,32 +118,64 @@ class PnPController(BaseController):
         self._reset_arm_positions = self._robot.get_joints_state().positions[
             self._planner.isaac_arm_joint_indices
         ].copy()
+        self._approach_state = ApproachState(
+            world=self._world,
+            robot=self._robot,
+            cube=self._cube,
+            planner=self._planner,
+            base_prim=self._base_prim,
+            tool_center_prim=self._tool_center_prim,
+            approach_tolerance=self._approach_tolerance,
+        )
+        wait_for_stable_state = WaitForStableState(
+            robot=self._robot,
+            cube=self._cube,
+            arm_joint_indices=self._planner.isaac_arm_joint_indices,
+        )
+        self._state_objects: dict[PickPlacePhase, PnPState] = {
+            self._approach_state.phase: self._approach_state,
+            wait_for_stable_state.phase: wait_for_stable_state,
+        }
 
-    def _forward_approach(self) -> ArticulationAction:
-        if not self._approach_started:
-            self._approach_started = True
-            self._approach_target_position, self._approach_target_orientation = self._pregrasp_prim.get_world_pose()
-            transform = get_relative_transform(source_prim=self._pregrasp_prim.prim, target_prim=self._base_prim.prim)
-            position, orientation = pose_from_tf_matrix(transform)
-            self._trajectory = self._planner.plan_to_pose(position, orientation)
-            if self._trajectory is None:
-                raise RuntimeError("CuRobo failed to generate an approach trajectory.")
-            self._approach_index = 0
-            self._robot.gripper.open()
+    def _forward_state_object(self) -> ArticulationAction | None:
+        """Validate and advance the active state object by one tick."""
+        state = self._state_objects[self._phase]
+        perturbation = state.detect_perturbation()
+        if perturbation is not None:
+            recovery_phase = state.recovery_phase(perturbation)
+            carb.log_warn(
+                f"PnP state {self._phase.name} invalidated: "
+                f"{perturbation.reason}; metrics={dict(perturbation.metrics)}"
+            )
+            self._transition_to(recovery_phase)
+            return None
 
-        self._approach_index = min(self._approach_index, len(self._trajectory) - 1)
-        action = self._trajectory[self._approach_index]
-        self._approach_index += 1
-        tool_center_position, _ = self._tool_center_prim.get_world_pose()
-        if np.linalg.norm(tool_center_position - self._approach_target_position) <= self._approach_tolerance:
-            self._phase = PickPlacePhase.DESCEND
-            self._trajectory = None
-        return action
+        step = state.update()
+        if step.next_phase is not None:
+            self._transition_to(step.next_phase)
+        return step.action
+
+    def _transition_to(self, next_phase: PickPlacePhase) -> None:
+        """Perform state lifecycle hooks and record one state transition."""
+        previous_phase = self._phase
+        previous_state = self._state_objects.get(previous_phase)
+        if previous_state is not None:
+            previous_state.exit()
+
+        self._phase = next_phase
+        next_state = self._state_objects.get(next_phase)
+        if next_state is not None:
+            next_state.enter()
+
+        if previous_phase is not next_phase:
+            carb.log_info(
+                f"PnP phase transition: {previous_phase.name} -> {next_phase.name}"
+            )
 
     def _forward_descend(self) -> ArticulationAction:
         desired_tool_transform = pose_to_matrix(
             self._cube.get_world_pose()[0],
-            self._approach_target_orientation,
+            self._approach_state.target_orientation,
         )
         desired_rmp_transform = desired_tool_transform @ np.linalg.inv(self._rmp_right_gripper_to_tool_center)
         target_position, target_orientation = pose_from_tf_matrix(desired_rmp_transform)
@@ -168,13 +188,13 @@ class PnPController(BaseController):
 
         tool_center_position, _ = self._tool_center_prim.get_world_pose()
         if np.linalg.norm(tool_center_position - self._cube.get_world_pose()[0]) <= self._approach_tolerance:
-            self._phase = PickPlacePhase.GRASP
+            self._transition_to(PickPlacePhase.IDLE)
         return action
 
     def _forward_grasp(self) -> None:
         self._robot.gripper.close()
         self._planner.attach_cube()
-        self._phase = PickPlacePhase.LIFT
+        self._transition_to(PickPlacePhase.LIFT)
         return None
 
     def _forward_lift(self) -> ArticulationAction:
@@ -192,7 +212,7 @@ class PnPController(BaseController):
         action = self._articulation_rmpflow.get_next_articulation_action()
         rmp_position, _ = self._get_rmp_right_gripper_pose()
         if np.linalg.norm(rmp_position - self._lift_target_position) <= self._approach_tolerance:
-            self._phase = PickPlacePhase.PLACE
+            self._transition_to(PickPlacePhase.PLACE)
         return action
 
     def _forward_place(self) -> ArticulationAction:
@@ -213,13 +233,13 @@ class PnPController(BaseController):
         cube_position, _ = self._cube.get_world_pose()
         target_cube_position, _ = self._world.scene.get_object("target_cube").get_world_pose()
         if np.linalg.norm(cube_position - target_cube_position) <= self._approach_tolerance:
-            self._phase = PickPlacePhase.RELEASE
+            self._transition_to(PickPlacePhase.RELEASE)
         return action
 
     def _forward_release(self) -> None:
         self._robot.gripper.open()
         self._planner.detach_cube()
-        self._phase = PickPlacePhase.RETURN
+        self._transition_to(PickPlacePhase.RETURN)
         return None
 
     def _forward_return(self) -> ArticulationAction:
@@ -236,7 +256,7 @@ class PnPController(BaseController):
         arm_positions = self._robot.get_joints_state().positions[self._planner.isaac_arm_joint_indices]
         if np.linalg.norm(arm_positions - self._reset_arm_positions) <= self._approach_tolerance:
             self._return_complete = True
-            self._phase = PickPlacePhase.IDLE
+            self._transition_to(PickPlacePhase.IDLE)
         return action
 
     def _calibrate_rmpflow_tool_center_transform(self) -> None:
