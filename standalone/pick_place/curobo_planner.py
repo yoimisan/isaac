@@ -164,6 +164,33 @@ class CuroboPlanner:
             MotionGenPlanConfig(pose_cost_metric=pose_metric),
         )
 
+    def plan_linear_motion(
+        self,
+        base_position: np.ndarray,
+        base_quaternion: np.ndarray,
+        *,
+        linear_axis: int,
+        project_to_goal_frame: bool,
+    ) -> list[ArticulationAction] | None:
+        """Plan while holding every pose dimension except one translation axis."""
+        if linear_axis not in (0, 1, 2):
+            raise ValueError(f"linear_axis must be 0, 1, or 2; got {linear_axis}.")
+
+        hold_weight = self.tensor_args.to_device(
+            [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        )
+        hold_weight[3 + linear_axis] = 0.0
+        pose_metric = PoseCostMetric(
+            hold_partial_pose=True,
+            hold_vec_weight=hold_weight,
+            project_to_goal_frame=project_to_goal_frame,
+        )
+        return self._plan_to_pose(
+            base_position,
+            base_quaternion,
+            MotionGenPlanConfig(pose_cost_metric=pose_metric),
+        )
+
     def _plan_to_pose(
         self,
         base_position: np.ndarray,

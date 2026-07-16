@@ -45,7 +45,7 @@ def run(simulation_app: SimulationApp) -> None:
                 articulation_controller.apply_action(action)
 
         world.step(render=True)
-        if world.is_playing() and controller.is_complete() and task.is_done():
-            carb.log_info("Pick-and-place completed; the arm returned to its reset pose.")
-            world.pause()
+        # if world.is_playing() and controller.is_complete() and task.is_done():
+        #     carb.log_info("Pick-and-place completed; the arm returned to its reset pose.")
+        #     world.pause()
 
