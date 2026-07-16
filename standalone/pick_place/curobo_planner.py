@@ -8,12 +8,17 @@ from typing import Any
 import carb
 import numpy as np
 from curobo.geom.sdf.world import CollisionCheckerType
+from curobo.rollout.cost.pose_cost import PoseCostMetric
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose as CuRoboPose
 from curobo.types.state import JointState as CuRoboJointState
 from curobo.util.usd_helper import UsdHelper
 from curobo.util_file import get_robot_configs_path, join_path, load_yaml
-from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig
+from curobo.wrap.reacher.motion_gen import (
+    MotionGen,
+    MotionGenConfig,
+    MotionGenPlanConfig,
+)
 from isaacsim.core.api.scenes import Scene
 from isaacsim.core.utils.types import ArticulationAction, JointsState
 from isaacsim.robot.manipulators.examples.franka import Franka
@@ -124,12 +129,64 @@ class CuroboPlanner:
         base_quaternion: np.ndarray,
     ) -> list[ArticulationAction] | None:
         """Plan to a CuRobo base-frame pose."""
+        return self._plan_to_pose(base_position, base_quaternion)
+
+    def plan_linear_approach(
+        self,
+        base_position: np.ndarray,
+        base_quaternion: np.ndarray,
+        *,
+        approach_distance: float,
+        linear_axis: int = 2,
+        constraint_start_fraction: float = 0.8,
+    ) -> list[ArticulationAction] | None:
+        """Plan a final approach constrained to one axis in the goal frame."""
+        if linear_axis not in (0, 1, 2):
+            raise ValueError(f"linear_axis must be 0, 1, or 2; got {linear_axis}.")
+        if approach_distance <= 0.0:
+            raise ValueError(
+                f"approach_distance must be positive; got {approach_distance}."
+            )
+
+        pose_metric = PoseCostMetric.create_grasp_approach_metric(
+            offset_position=approach_distance,
+            linear_axis=linear_axis,
+            tstep_fraction=constraint_start_fraction,
+            project_to_goal_frame=True,
+            tensor_args=self.tensor_args,
+        )
+        # CuRobo 0.7.8 accepts project_to_goal_frame in the helper but does not
+        # copy it into the returned metric. Set it explicitly for stable semantics.
+        pose_metric.project_to_goal_frame = True
+        return self._plan_to_pose(
+            base_position,
+            base_quaternion,
+            MotionGenPlanConfig(pose_cost_metric=pose_metric),
+        )
+
+    def _plan_to_pose(
+        self,
+        base_position: np.ndarray,
+        base_quaternion: np.ndarray,
+        plan_config: MotionGenPlanConfig | None = None,
+    ) -> list[ArticulationAction] | None:
+        """Run one pose query with an optional CuRobo planning configuration."""
         goal_pose = CuRoboPose(
             position=self.tensor_args.to_device([base_position]),
             quaternion=self.tensor_args.to_device([base_quaternion]),
         )
         start_state = self._get_current_joint_state()
-        result = self._motion_gen.plan_single(start_state=start_state, goal_pose=goal_pose)
+        if plan_config is None:
+            result = self._motion_gen.plan_single(
+                start_state=start_state,
+                goal_pose=goal_pose,
+            )
+        else:
+            result = self._motion_gen.plan_single(
+                start_state=start_state,
+                goal_pose=goal_pose,
+                plan_config=plan_config,
+            )
         if not result.success.item():
             carb.log_warn("CuRobo motion plan failed.")
             return None

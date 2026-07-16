@@ -109,13 +109,6 @@ class ApproachState(PnPState):
             next_phase = PickPlacePhase.DESCEND
         return StateStep(action=action, next_phase=next_phase)
 
-    @property
-    def target_orientation(self) -> np.ndarray:
-        """Orientation carried into the following descend state."""
-        if self._target_orientation is None:
-            raise RuntimeError("Approach has not produced a target orientation.")
-        return self._target_orientation
-
     def _start_plan(self) -> None:
         if self._pregrasp_prim is None:
             raise RuntimeError("Approach state was updated before enter().")
@@ -135,4 +128,3 @@ class ApproachState(PnPState):
             raise RuntimeError("CuRobo failed to generate an approach trajectory.")
         self._trajectory_index = 0
         self._robot.gripper.open()
-
