@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import numpy as np
+from isaacsim.core.api import World
+from isaacsim.core.api.objects import DynamicCuboid
 from isaacsim.core.utils.types import ArticulationAction
 from isaacsim.robot.manipulators.examples.franka import Franka
 
 from pick_place.curobo_planner import CuroboPlanner
-from pick_place.states.base import PickPlacePhase, PnPState, StateStep
+from pick_place.states.base import (
+    Perturbation,
+    PickPlacePhase,
+    PnPState,
+    StateStep,
+)
 
 
 class ReturnState(PnPState):
@@ -18,15 +25,21 @@ class ReturnState(PnPState):
     def __init__(
         self,
         *,
+        world: World,
         robot: Franka,
+        cube: DynamicCuboid,
         planner: CuroboPlanner,
         reset_arm_positions: np.ndarray,
         approach_tolerance: float,
+        placement_tolerance: float = 0.06,
     ) -> None:
+        self._world = world
         self._robot = robot
+        self._cube = cube
         self._planner = planner
         self._reset_arm_positions = reset_arm_positions.copy()
         self._approach_tolerance = approach_tolerance
+        self._placement_tolerance = placement_tolerance
 
         self._trajectory: list[ArticulationAction] | None = None
         self._trajectory_index: int | None = None
@@ -47,6 +60,27 @@ class ReturnState(PnPState):
         """Drop trajectory data while preserving the completion result."""
         self._trajectory = None
         self._trajectory_index = None
+
+    def detect_perturbation(self) -> Perturbation | None:
+        """Detect a released cube that leaves the target during return."""
+        cube_position, _ = self._cube.get_world_pose()
+        target_region = self._world.scene.get_object("target_region")
+        target_position, _ = target_region.get_world_pose()
+        position_error = float(
+            np.linalg.norm(cube_position[:2] - target_position[:2])
+        )
+        if position_error <= self._placement_tolerance:
+            return None
+        return Perturbation(
+            reason="cube_left_target_during_return",
+            metrics={"position_error": position_error},
+        )
+
+    def recovery_phase(self, perturbation: Perturbation) -> PickPlacePhase:
+        """Wait for the displaced cube to settle before reacquiring it."""
+        if perturbation.reason == "cube_left_target_during_return":
+            return PickPlacePhase.WAIT_FOR_STABLE
+        return super().recovery_phase(perturbation)
 
     def update(self) -> StateStep:
         """Execute one return waypoint or finish the episode in idle."""

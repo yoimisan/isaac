@@ -29,6 +29,7 @@ from pick_place.states import (
 class PnPController(BaseController):
     """Execute pick-and-place as a state machine backed by CuRobo plans."""
 
+    _GRASP_TOLERANCE = 0.06
     _LIFT_OFFSET = 0.15
 
     def __init__(
@@ -58,6 +59,11 @@ class PnPController(BaseController):
     def forward(self) -> ArticulationAction | None:
         """Return the next articulation action for the active phase."""
         return self._forward_state_object()
+
+    @property
+    def phase(self) -> PickPlacePhase:
+        """Return the active phase for observation and validation tooling."""
+        return self._phase
 
     def is_complete(self) -> bool:
         """Return whether the cube was released and the arm returned to its reset pose."""
@@ -99,22 +105,29 @@ class PnPController(BaseController):
             approach_tolerance=self._approach_tolerance,
         )
         lift_state = LiftState(
+            robot=self._robot,
+            cube=self._cube,
             planner=self._planner,
             base_prim=self._base_prim,
             tool_center_prim=self._tool_center_prim,
             lift_offset=self._LIFT_OFFSET,
             approach_tolerance=self._approach_tolerance,
+            grasp_tolerance=self._GRASP_TOLERANCE,
         )
         place_state = PlaceState(
             world=self._world,
+            robot=self._robot,
             cube=self._cube,
             planner=self._planner,
             base_prim=self._base_prim,
             tool_center_prim=self._tool_center_prim,
             approach_tolerance=self._approach_tolerance,
+            grasp_tolerance=self._GRASP_TOLERANCE,
         )
         self._return_state = ReturnState(
+            world=self._world,
             robot=self._robot,
+            cube=self._cube,
             planner=self._planner,
             reset_arm_positions=reset_arm_positions,
             approach_tolerance=self._approach_tolerance,
@@ -124,10 +137,24 @@ class PnPController(BaseController):
             wait_for_stable_state,
             approach_state,
             descend_state,
-            GraspState(robot=self._robot, planner=self._planner),
+            GraspState(
+                robot=self._robot,
+                cube=self._cube,
+                planner=self._planner,
+                tool_center_prim=self._tool_center_prim,
+                grasp_tolerance=self._GRASP_TOLERANCE,
+            ),
             lift_state,
             place_state,
-            ReleaseState(robot=self._robot, planner=self._planner),
+            ReleaseState(
+                world=self._world,
+                robot=self._robot,
+                cube=self._cube,
+                planner=self._planner,
+                tool_center_prim=self._tool_center_prim,
+                placement_tolerance=self._approach_tolerance,
+                grasp_tolerance=self._GRASP_TOLERANCE,
+            ),
             self._return_state,
         )
         self._state_objects = {state.phase: state for state in states}

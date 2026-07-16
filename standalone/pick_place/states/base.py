@@ -51,10 +51,12 @@ class PnPState(ABC):
     def exit(self) -> None:
         """Release state-local execution data before a transition."""
 
+    @abstractmethod
     def detect_perturbation(self) -> Perturbation | None:
         """Return an invalidated state assumption, if one is observed."""
         return None
 
+    @abstractmethod
     def recovery_phase(self, perturbation: Perturbation) -> PickPlacePhase:
         """Choose where this state recovers after a perturbation."""
         raise RuntimeError(
@@ -65,4 +67,3 @@ class PnPState(ABC):
     @abstractmethod
     def update(self) -> StateStep:
         """Advance normal execution by one simulation tick."""
-

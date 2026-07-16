@@ -6,7 +6,12 @@ import numpy as np
 from isaacsim.core.api.objects import DynamicCuboid
 from isaacsim.robot.manipulators.examples.franka import Franka
 
-from pick_place.states.base import PickPlacePhase, PnPState, StateStep
+from pick_place.states.base import (
+    Perturbation,
+    PickPlacePhase,
+    PnPState,
+    StateStep,
+)
 
 
 class WaitForStableState(PnPState):
@@ -31,6 +36,14 @@ class WaitForStableState(PnPState):
         self._cube_angular_velocity_tolerance = cube_angular_velocity_tolerance
         self._arm_velocity_tolerance = arm_velocity_tolerance
 
+    def detect_perturbation(self) -> Perturbation | None:
+        """Treat motion as expected input while waiting rather than a disturbance."""
+        return None
+
+    def recovery_phase(self, perturbation: Perturbation) -> PickPlacePhase:
+        """Reject recovery requests because waiting already is a recovery state."""
+        return super().recovery_phase(perturbation)
+
     def update(self) -> StateStep:
         """Continue waiting or request a fresh approach plan."""
         joint_state = self._robot.get_joints_state()
@@ -50,4 +63,3 @@ class WaitForStableState(PnPState):
             else None
         )
         return StateStep(next_phase=next_phase)
-
