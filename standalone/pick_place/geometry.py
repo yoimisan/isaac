@@ -10,42 +10,84 @@ from isaacsim.core.prims import SingleXFormPrim
 from isaacsim.core.utils.transformations import pose_from_tf_matrix
 
 
-def sample_cube_pregrasp_pose(cube: DynamicCuboid) -> CuRoboPose:
-    """Sample a pre-grasp pose expressed in the cube's local frame."""
-    face_index = np.random.randint(2)
+def sample_cube_pregrasp_pose(
+    cube: DynamicCuboid,
+    robot_world_position: np.ndarray,
+    *,
+    min_elevation: float = np.deg2rad(65.0),
+    max_elevation: float = np.deg2rad(80.0),
+) -> CuRoboPose:
+    """Sample a gravity-aware pre-grasp and express it in the cube frame.
 
-    cube_size = cube.get_size()
-    offset_length = 1.5 * (np.sqrt(2.0) * cube_size / 2.0)
-    theta = np.random.random() * np.pi / 4.0 + np.pi / 3.0
+    The position and tool axes are constrained in the world frame first. The
+    resulting pose is then converted to cube-local coordinates so a flipped
+    cube cannot turn a nominally upward pre-grasp into a goal below the floor.
+    """
+    if not 0.0 < min_elevation <= max_elevation < np.pi / 2.0:
+        raise ValueError(
+            "Pre-grasp elevation must satisfy "
+            "0 < min_elevation <= max_elevation < pi / 2."
+        )
 
-    if face_index == 0:
-        local_frame_translation = [
-            offset_length * np.cos(theta),
-            0.0,
-            offset_length * np.sin(theta),
-        ]
-        local_frame_x = [np.cos(theta - np.pi / 2.0), 0.0, np.sin(theta - np.pi / 2.0)]
-        local_frame_y = [0.0, -1.0, 0.0]
-        local_frame_z = [np.cos(theta - np.pi), 0.0, np.sin(theta - np.pi)]
+    cube_position, cube_orientation = cube.get_world_pose()
+    cube_position = np.asarray(cube_position, dtype=np.float64)
+    robot_world_position = np.asarray(robot_world_position, dtype=np.float64)
+    world_up = np.array([0.0, 0.0, 1.0])
+
+    # Approach from the robot-facing side. In this task the Franka is behind
+    # the cube on world -X, which makes both tool X and Z project onto +X.
+    horizontal = robot_world_position - cube_position
+    horizontal -= np.dot(horizontal, world_up) * world_up
+    horizontal_norm = np.linalg.norm(horizontal)
+    if horizontal_norm <= 1e-8:
+        horizontal = np.array([-1.0, 0.0, 0.0])
     else:
-        local_frame_translation = [
-            0.0,
-            offset_length * np.cos(theta),
-            offset_length * np.sin(theta),
-        ]
-        if theta < np.pi / 2:
-            local_frame_x = [0.0, -np.sin(theta), np.cos(theta)]
-            local_frame_y = [-1.0, 0.0, 0.0]
-            local_frame_z = [0.0, -np.cos(theta), -np.sin(theta)]
-        else:
-            local_frame_x = [0.0, np.sin(np.pi - theta), np.cos(np.pi - theta)]
-            local_frame_y = [1.0, 0.0, 0.0]
-            local_frame_z = [0.0, np.cos(np.pi - theta), -np.sin(np.pi - theta)]
+        horizontal /= horizontal_norm
+    if horizontal[0] >= -1e-6:
+        horizontal = np.array([-1.0, 0.0, 0.0])
 
-    local_transform = np.eye(4, dtype=np.float32)
-    local_transform[:3, :3] = np.column_stack((local_frame_x, local_frame_y, local_frame_z))
-    local_transform[:3, 3] = local_frame_translation
-    return CuRoboPose.from_matrix(local_transform)
+    elevation = np.random.uniform(min_elevation, max_elevation)
+    cube_size = float(cube.get_size())
+    offset_length = 1.5 * (np.sqrt(2.0) * cube_size / 2.0)
+    radial = (
+        np.cos(elevation) * horizontal
+        + np.sin(elevation) * world_up
+    )
+    pregrasp_position = cube_position + offset_length * radial
+
+    # Tool +Z points from the pre-grasp toward the cube. Tool +X is the
+    # world-up projection orthogonal to Z, with a positive world-X component.
+    tool_z = -radial
+    tool_x = world_up - np.dot(world_up, tool_z) * tool_z
+    tool_x /= np.linalg.norm(tool_x)
+    if tool_x[0] < 0.0:
+        tool_x = -tool_x
+    tool_y = np.cross(tool_z, tool_x)
+    tool_y /= np.linalg.norm(tool_y)
+
+    world_pregrasp = np.eye(4)
+    world_pregrasp[:3, :3] = np.column_stack((tool_x, tool_y, tool_z))
+    world_pregrasp[:3, 3] = pregrasp_position
+
+    world_cube = pose_to_matrix(cube_position, cube_orientation)
+    cube_pregrasp = np.linalg.inv(world_cube) @ world_pregrasp
+
+    vertical_half_extent = (
+        0.5 * cube_size * np.sum(np.abs(world_cube[2, :3]))
+    )
+    vertical_offset = float(np.dot(pregrasp_position - cube_position, world_up))
+    minimum_clearance = 0.05 * cube_size
+    if vertical_offset <= vertical_half_extent + minimum_clearance:
+        raise RuntimeError(
+            "Sampled pre-grasp does not clear the cube in world +Z: "
+            f"offset={vertical_offset}, half_extent={vertical_half_extent}."
+        )
+    if tool_x[0] <= 0.0 or tool_z[0] <= 0.0:
+        raise RuntimeError(
+            "Sampled tool X and Z axes must have positive world-X components."
+        )
+
+    return CuRoboPose.from_matrix(cube_pregrasp.astype(np.float32))
 
 
 def create_xform(

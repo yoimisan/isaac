@@ -51,7 +51,11 @@ class ApproachState(PnPState):
 
     def enter(self) -> None:
         """Sample a fresh pre-grasp pose and discard the previous plan."""
-        self._pregrasp_local_pose = sample_cube_pregrasp_pose(self._cube)
+        robot_position, _ = self._robot.get_world_pose()
+        self._pregrasp_local_pose = sample_cube_pregrasp_pose(
+            self._cube,
+            robot_position,
+        )
         position, orientation = self._compute_pregrasp_world_pose()
         self._pregrasp_marker = create_xform(
             world=self._world,
