@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import numpy as np
+from curobo.types.math import Pose as CuRoboPose
 from isaacsim.core.api import World
 from isaacsim.core.api.objects import DynamicCuboid
 from isaacsim.core.prims import SingleXFormPrim
-from isaacsim.core.utils.transformations import get_relative_transform, pose_from_tf_matrix
 from isaacsim.robot.manipulators.examples.franka import Franka
 
 from pick_place.curobo_planner import CuroboPlanner
-from pick_place.geometry import create_cube_pregrasp_frame
+from pick_place.geometry import (
+    compose_poses,
+    create_xform,
+    curobo_pose_to_numpy,
+    sample_cube_pregrasp_pose,
+)
 from pick_place.states.base import Perturbation, PickPlacePhase, PnPState, StateStep
 
 
@@ -26,8 +31,6 @@ class ApproachState(PnPState):
         robot: Franka,
         cube: DynamicCuboid,
         planner: CuroboPlanner,
-        base_prim: SingleXFormPrim,
-        tool_center_prim: SingleXFormPrim,
         approach_tolerance: float,
         cube_motion_tolerance: float = 0.06,
     ) -> None:
@@ -35,12 +38,11 @@ class ApproachState(PnPState):
         self._robot = robot
         self._cube = cube
         self._planner = planner
-        self._base_prim = base_prim
-        self._tool_center_prim = tool_center_prim
         self._approach_tolerance = approach_tolerance
         self._cube_motion_tolerance = cube_motion_tolerance
 
-        self._pregrasp_prim: SingleXFormPrim | None = None
+        self._pregrasp_local_pose: CuRoboPose | None = None
+        self._pregrasp_marker: SingleXFormPrim | None = None
         self._trajectory = None
         self._trajectory_index: int | None = None
         self._target_position: np.ndarray | None = None
@@ -49,10 +51,15 @@ class ApproachState(PnPState):
 
     def enter(self) -> None:
         """Sample a fresh pre-grasp pose and discard the previous plan."""
-        self._pregrasp_prim = create_cube_pregrasp_frame(
-            self._world,
-            self._cube,
+        self._pregrasp_local_pose = sample_cube_pregrasp_pose(self._cube)
+        position, orientation = self._compute_pregrasp_world_pose()
+        self._pregrasp_marker = create_xform(
+            world=self._world,
+            prim_path="/World/CubePregrasp",
+            name="cube_pregrasp",
             exist_ok=True,
+            position=position,
+            orientation=orientation,
         )
         self._trajectory = None
         self._trajectory_index = None
@@ -99,7 +106,7 @@ class ApproachState(PnPState):
         action = self._trajectory[self._trajectory_index]
         self._trajectory_index += 1
 
-        tool_center_position, _ = self._tool_center_prim.get_world_pose()
+        tool_center_position, _ = self._planner.get_tool_world_pose()
         target_error = np.linalg.norm(
             tool_center_position - self._target_position
         )
@@ -110,21 +117,39 @@ class ApproachState(PnPState):
         return StateStep(action=action, next_phase=next_phase)
 
     def _start_plan(self) -> None:
-        if self._pregrasp_prim is None:
+        if self._pregrasp_local_pose is None:
             raise RuntimeError("Approach state was updated before enter().")
 
         cube_position, _ = self._cube.get_world_pose()
         self._planned_cube_position = np.asarray(cube_position).copy()
         self._target_position, self._target_orientation = (
-            self._pregrasp_prim.get_world_pose()
+            self._compute_pregrasp_world_pose()
         )
-        transform = get_relative_transform(
-            source_prim=self._pregrasp_prim.prim,
-            target_prim=self._base_prim.prim,
+        if self._pregrasp_marker is not None:
+            self._pregrasp_marker.set_world_pose(
+                self._target_position,
+                self._target_orientation,
+            )
+        self._planner.prepare_obstacle_for_manipulation(self._cube.prim_path)
+        self._trajectory = self._planner.plan_to_pose(
+            self._target_position,
+            self._target_orientation,
         )
-        position, orientation = pose_from_tf_matrix(transform)
-        self._trajectory = self._planner.plan_to_pose(position, orientation)
         if self._trajectory is None:
             raise RuntimeError("CuRobo failed to generate an approach trajectory.")
         self._trajectory_index = 0
         self._robot.gripper.open()
+
+    def _compute_pregrasp_world_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        if self._pregrasp_local_pose is None:
+            raise RuntimeError("Pre-grasp pose has not been sampled.")
+        cube_position, cube_orientation = self._cube.get_world_pose()
+        local_position, local_orientation = curobo_pose_to_numpy(
+            self._pregrasp_local_pose
+        )
+        return compose_poses(
+            cube_position,
+            cube_orientation,
+            local_position,
+            local_orientation,
+        )

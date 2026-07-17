@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 from isaacsim.core.api.objects import DynamicCuboid
-from isaacsim.core.prims import SingleXFormPrim
 from isaacsim.robot.manipulators.examples.franka import Franka
 
 from pick_place.curobo_planner import CuroboPlanner
@@ -27,19 +26,17 @@ class GraspState(PnPState):
         robot: Franka,
         cube: DynamicCuboid,
         planner: CuroboPlanner,
-        tool_center_prim: SingleXFormPrim,
         grasp_tolerance: float,
     ) -> None:
         self._robot = robot
         self._cube = cube
         self._planner = planner
-        self._tool_center_prim = tool_center_prim
         self._grasp_tolerance = grasp_tolerance
 
     def detect_perturbation(self) -> Perturbation | None:
         """Detect a cube that moved out of reach before the gripper closes."""
         cube_position, _ = self._cube.get_world_pose()
-        tool_position, _ = self._tool_center_prim.get_world_pose()
+        tool_position, _ = self._planner.get_tool_world_pose()
         position_error = float(np.linalg.norm(cube_position - tool_position))
         if position_error <= self._grasp_tolerance:
             return None

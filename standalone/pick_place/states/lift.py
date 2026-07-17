@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 from isaacsim.core.api.objects import DynamicCuboid
-from isaacsim.core.prims import SingleXFormPrim
-from isaacsim.core.utils.transformations import pose_from_tf_matrix
 from isaacsim.core.utils.types import ArticulationAction
 from isaacsim.robot.manipulators.examples.franka import Franka
 
 from pick_place.curobo_planner import CuroboPlanner
-from pick_place.geometry import pose_to_matrix
 from pick_place.states.base import (
     Perturbation,
     PickPlacePhase,
@@ -30,8 +27,6 @@ class LiftState(PnPState):
         robot: Franka,
         cube: DynamicCuboid,
         planner: CuroboPlanner,
-        base_prim: SingleXFormPrim,
-        tool_center_prim: SingleXFormPrim,
         lift_offset: float,
         approach_tolerance: float,
         grasp_tolerance: float = 0.06,
@@ -39,8 +34,6 @@ class LiftState(PnPState):
         self._robot = robot
         self._cube = cube
         self._planner = planner
-        self._base_prim = base_prim
-        self._tool_center_prim = tool_center_prim
         self._lift_offset = lift_offset
         self._approach_tolerance = approach_tolerance
         self._grasp_tolerance = grasp_tolerance
@@ -68,7 +61,7 @@ class LiftState(PnPState):
     def detect_perturbation(self) -> Perturbation | None:
         """Detect a cube that is no longer moving with the tool center."""
         cube_position, _ = self._cube.get_world_pose()
-        tool_position, _ = self._tool_center_prim.get_world_pose()
+        tool_position, _ = self._planner.get_tool_world_pose()
         position_error = float(np.linalg.norm(cube_position - tool_position))
         if position_error <= self._grasp_tolerance:
             return None
@@ -89,7 +82,7 @@ class LiftState(PnPState):
         if self._trajectory is None:
             self._start_plan()
 
-        tool_position, _ = self._tool_center_prim.get_world_pose()
+        tool_position, _ = self._planner.get_tool_world_pose()
         if (
             np.linalg.norm(tool_position - self._target_position)
             <= self._approach_tolerance
@@ -105,22 +98,14 @@ class LiftState(PnPState):
         return StateStep(action=action)
 
     def _start_plan(self) -> None:
-        tool_position, tool_orientation = self._tool_center_prim.get_world_pose()
-        base_position, base_orientation = self._base_prim.get_world_pose()
+        tool_position, tool_orientation = self._planner.get_tool_world_pose()
 
         self._target_position = np.asarray(tool_position).copy()
         self._target_position[2] += self._lift_offset
-        world_goal = pose_to_matrix(self._target_position, tool_orientation)
-        world_to_base = np.linalg.inv(
-            pose_to_matrix(base_position, base_orientation)
-        )
-        goal_position, goal_orientation = pose_from_tf_matrix(
-            world_to_base @ world_goal
-        )
 
         self._trajectory = self._planner.plan_linear_motion(
-            goal_position,
-            goal_orientation,
+            self._target_position,
+            tool_orientation,
             linear_axis=2,
             project_to_goal_frame=False,
         )

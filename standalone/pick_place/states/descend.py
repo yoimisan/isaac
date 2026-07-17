@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 from isaacsim.core.api.objects import DynamicCuboid
-from isaacsim.core.prims import SingleXFormPrim
-from isaacsim.core.utils.transformations import pose_from_tf_matrix
 from isaacsim.core.utils.types import ArticulationAction
 
 from pick_place.curobo_planner import CuroboPlanner
-from pick_place.geometry import pose_to_matrix
 from pick_place.states.base import Perturbation, PickPlacePhase, PnPState, StateStep
 
 
@@ -23,15 +20,11 @@ class DescendState(PnPState):
         *,
         cube: DynamicCuboid,
         planner: CuroboPlanner,
-        base_prim: SingleXFormPrim,
-        tool_center_prim: SingleXFormPrim,
         approach_tolerance: float,
         cube_motion_tolerance: float = 0.06,
     ) -> None:
         self._cube = cube
         self._planner = planner
-        self._base_prim = base_prim
-        self._tool_center_prim = tool_center_prim
         self._approach_tolerance = approach_tolerance
         self._cube_motion_tolerance = cube_motion_tolerance
 
@@ -74,7 +67,7 @@ class DescendState(PnPState):
 
     def update(self) -> StateStep:
         """Execute a constrained waypoint or advance to grasp at the cube."""
-        tool_position, _ = self._tool_center_prim.get_world_pose()
+        tool_position, tool_orientation = self._planner.get_tool_world_pose()
         cube_position, _ = self._cube.get_world_pose()
         if (
             np.linalg.norm(tool_position - cube_position)
@@ -83,7 +76,7 @@ class DescendState(PnPState):
             return StateStep(next_phase=PickPlacePhase.GRASP)
 
         if self._trajectory is None:
-            self._start_plan(tool_position, cube_position)
+            self._start_plan(tool_position, tool_orientation, cube_position)
 
         self._trajectory_index = min(
             self._trajectory_index,
@@ -96,26 +89,17 @@ class DescendState(PnPState):
     def _start_plan(
         self,
         tool_position: np.ndarray,
+        tool_orientation: np.ndarray,
         cube_position: np.ndarray,
     ) -> None:
-        _, tool_orientation = self._tool_center_prim.get_world_pose()
-        base_position, base_orientation = self._base_prim.get_world_pose()
-
         self._planned_cube_position = np.asarray(cube_position).copy()
-        world_to_base = np.linalg.inv(
-            pose_to_matrix(base_position, base_orientation)
-        )
-        world_goal = pose_to_matrix(cube_position, tool_orientation)
-        goal_position, goal_orientation = pose_from_tf_matrix(
-            world_to_base @ world_goal
-        )
 
         approach_distance = float(
             np.linalg.norm(np.asarray(tool_position) - cube_position)
         )
         self._trajectory = self._planner.plan_linear_approach(
-            goal_position,
-            goal_orientation,
+            cube_position,
+            tool_orientation,
             approach_distance=approach_distance,
             linear_axis=2,
         )

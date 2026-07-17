@@ -5,7 +5,6 @@ from __future__ import annotations
 import numpy as np
 from isaacsim.core.api import World
 from isaacsim.core.api.objects import DynamicCuboid
-from isaacsim.core.prims import SingleXFormPrim
 from isaacsim.robot.manipulators.examples.franka import Franka
 
 from pick_place.curobo_planner import CuroboPlanner
@@ -29,7 +28,6 @@ class ReleaseState(PnPState):
         robot: Franka,
         cube: DynamicCuboid,
         planner: CuroboPlanner,
-        tool_center_prim: SingleXFormPrim,
         placement_tolerance: float,
         grasp_tolerance: float = 0.06,
     ) -> None:
@@ -37,7 +35,6 @@ class ReleaseState(PnPState):
         self._robot = robot
         self._cube = cube
         self._planner = planner
-        self._tool_center_prim = tool_center_prim
         self._placement_tolerance = placement_tolerance
         self._grasp_tolerance = grasp_tolerance
         self._recovering_from_cube_loss = False
@@ -65,7 +62,7 @@ class ReleaseState(PnPState):
         if position_error <= self._placement_tolerance:
             return None
 
-        tool_position, _ = self._tool_center_prim.get_world_pose()
+        tool_position, _ = self._planner.get_tool_world_pose()
         grasp_error = float(np.linalg.norm(cube_position - tool_position))
         if grasp_error > self._grasp_tolerance:
             return Perturbation(

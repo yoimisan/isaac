@@ -6,7 +6,6 @@ import carb
 from isaacsim.core.api import World
 from isaacsim.core.api.controllers import BaseController
 from isaacsim.core.api.objects import DynamicCuboid
-from isaacsim.core.prims import SingleXFormPrim
 from isaacsim.core.utils.types import ArticulationAction
 from isaacsim.robot.manipulators.examples.franka import Franka
 
@@ -47,12 +46,14 @@ class PnPController(BaseController):
         self._approach_tolerance = approach_tolerance
         self._phase = PickPlacePhase.IDLE
 
-        self._planner = CuroboPlanner(world.scene, robot, include_cube_in_collision=False)
+        self._planner = CuroboPlanner(world.scene, robot)
+        self._planner.register_dynamic_obstacle(cube)
         self._reset_phase_state()
 
     def reset(self) -> None:
         """Reset state-local data and begin a fresh approach."""
         super().reset()
+        self._planner.reset_episode()
         self._reset_phase_state()
         self._transition_to(PickPlacePhase.APPROACH)
 
@@ -71,15 +72,6 @@ class PnPController(BaseController):
 
     def _reset_phase_state(self) -> None:
         self._phase = PickPlacePhase.IDLE
-        base_link = self._planner.robot_config["kinematics"]["base_link"]
-        self._base_prim = SingleXFormPrim(
-            prim_path=f"{self._robot.prim_path}/{base_link}",
-            name="franka_base_link",
-        )
-        self._tool_center_prim = SingleXFormPrim(
-            prim_path=f"{self._robot.prim_path}/panda_hand/tool_center",
-            name="franka_tool_center",
-        )
         reset_arm_positions = self._robot.get_joints_state().positions[
             self._planner.isaac_arm_joint_indices
         ].copy()
@@ -88,8 +80,6 @@ class PnPController(BaseController):
             robot=self._robot,
             cube=self._cube,
             planner=self._planner,
-            base_prim=self._base_prim,
-            tool_center_prim=self._tool_center_prim,
             approach_tolerance=self._approach_tolerance,
         )
         wait_for_stable_state = WaitForStableState(
@@ -100,16 +90,12 @@ class PnPController(BaseController):
         descend_state = DescendState(
             cube=self._cube,
             planner=self._planner,
-            base_prim=self._base_prim,
-            tool_center_prim=self._tool_center_prim,
             approach_tolerance=self._approach_tolerance,
         )
         lift_state = LiftState(
             robot=self._robot,
             cube=self._cube,
             planner=self._planner,
-            base_prim=self._base_prim,
-            tool_center_prim=self._tool_center_prim,
             lift_offset=self._LIFT_OFFSET,
             approach_tolerance=self._approach_tolerance,
             grasp_tolerance=self._GRASP_TOLERANCE,
@@ -119,8 +105,6 @@ class PnPController(BaseController):
             robot=self._robot,
             cube=self._cube,
             planner=self._planner,
-            base_prim=self._base_prim,
-            tool_center_prim=self._tool_center_prim,
             approach_tolerance=self._approach_tolerance,
             grasp_tolerance=self._GRASP_TOLERANCE,
         )
@@ -141,7 +125,6 @@ class PnPController(BaseController):
                 robot=self._robot,
                 cube=self._cube,
                 planner=self._planner,
-                tool_center_prim=self._tool_center_prim,
                 grasp_tolerance=self._GRASP_TOLERANCE,
             ),
             lift_state,
@@ -151,7 +134,6 @@ class PnPController(BaseController):
                 robot=self._robot,
                 cube=self._cube,
                 planner=self._planner,
-                tool_center_prim=self._tool_center_prim,
                 placement_tolerance=self._approach_tolerance,
                 grasp_tolerance=self._GRASP_TOLERANCE,
             ),

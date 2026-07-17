@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import carb
 import numpy as np
 from curobo.types.math import Pose as CuRoboPose
 from isaacsim.core.api import World
 from isaacsim.core.api.objects import DynamicCuboid
 from isaacsim.core.prims import SingleXFormPrim
+from isaacsim.core.utils.transformations import pose_from_tf_matrix
 
 
 def sample_cube_pregrasp_pose(cube: DynamicCuboid) -> CuRoboPose:
@@ -72,26 +72,6 @@ def create_xform(
     )
 
 
-def create_cube_pregrasp_frame(
-    world: World,
-    cube: DynamicCuboid,
-    prim_path: str = "/World/Cube/cube_pregrasp",
-    name: str = "cube_pregrasp",
-    exist_ok: bool = False,
-) -> SingleXFormPrim:
-    """Create a sampled pre-grasp frame below the cube prim."""
-    local_frame_pose = sample_cube_pregrasp_pose(cube)
-    carb.log_info(f"Create local frame pose: {local_frame_pose.to_list()}.")
-    return create_xform(
-        world=world,
-        prim_path=prim_path,
-        exist_ok=exist_ok,
-        name=name,
-        translation=local_frame_pose.position.squeeze(0).detach().cpu().numpy(),
-        orientation=local_frame_pose.quaternion.squeeze(0).detach().cpu().numpy(),
-    )
-
-
 def pose_to_matrix(position: np.ndarray, orientation: np.ndarray) -> np.ndarray:
     """Convert a pose using a WXYZ quaternion or rotation matrix to a homogeneous matrix."""
     orientation = np.asarray(orientation)
@@ -112,3 +92,36 @@ def pose_to_matrix(position: np.ndarray, orientation: np.ndarray) -> np.ndarray:
     transform[:3, 3] = position
     return transform
 
+
+def compose_poses(
+    parent_position: np.ndarray,
+    parent_orientation: np.ndarray,
+    local_position: np.ndarray,
+    local_orientation: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compose a world parent pose with a parent-local child pose."""
+    transform = pose_to_matrix(
+        parent_position,
+        parent_orientation,
+    ) @ pose_to_matrix(local_position, local_orientation)
+    return pose_from_tf_matrix(transform)
+
+
+def relative_pose(
+    parent_position: np.ndarray,
+    parent_orientation: np.ndarray,
+    child_position: np.ndarray,
+    child_orientation: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Express a world-frame child pose in a world-frame parent's coordinates."""
+    world_parent = pose_to_matrix(parent_position, parent_orientation)
+    world_child = pose_to_matrix(child_position, child_orientation)
+    return pose_from_tf_matrix(np.linalg.inv(world_parent) @ world_child)
+
+
+def curobo_pose_to_numpy(pose: CuRoboPose) -> tuple[np.ndarray, np.ndarray]:
+    """Convert a single CuRobo pose to NumPy arrays using WXYZ quaternions."""
+    return (
+        pose.position.squeeze(0).detach().cpu().numpy(),
+        pose.quaternion.squeeze(0).detach().cpu().numpy(),
+    )
