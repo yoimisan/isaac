@@ -13,7 +13,7 @@ from pick_place.states import PickPlacePhase
 from pick_place.task import PickPlaceTask
 
 
-_ENABLE_RECOVERY_TEST_PERTURBATION = True
+_ENABLE_RECOVERY_TEST_PERTURBATION = False
 _PERTURB_AFTER_APPROACH_PERCENT = 0.5
 _PERTURB_CUBE_Y_OFFSET = 0.12
 

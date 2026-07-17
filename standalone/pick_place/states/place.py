@@ -10,12 +10,18 @@ from isaacsim.core.utils.types import ArticulationAction
 from isaacsim.robot.manipulators.examples.franka import Franka
 
 from pick_place.curobo_planner import CuroboPlanner
-from pick_place.geometry import compose_poses, create_xform, relative_pose
+from pick_place.geometry import create_xform, get_cube_canonical_axes
 from pick_place.states.base import (
     Perturbation,
     PickPlacePhase,
     PnPState,
     StateStep,
+)
+from pick_place.transforms import (
+    compose_poses,
+    matrix_to_pose,
+    pose_to_matrix,
+    relative_pose,
 )
 
 
@@ -141,9 +147,12 @@ class PlaceState(PnPState):
             raise RuntimeError("CuRobo failed to generate a place trajectory.")
         self._trajectory_index = 0
 
-    def _create_target_cube_pose(self) -> tuple[np.ndarray, np.ndarray]:
+    def _create_target_cube_pose(
+        self,
+        orientation: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
         target_region = self._world.scene.get_object("target_region")
-        position, orientation = target_region.get_world_pose()
+        position, _ = target_region.get_world_pose()
         self._planned_target_position = np.asarray(position).copy()
         self._target_cube_position = position + np.array(
             [0.0, 0.0, self._cube.get_size() / 2.0]
@@ -161,7 +170,40 @@ class PlaceState(PnPState):
 
     def _create_target_tool_pose(self) -> tuple[np.ndarray, np.ndarray]:
         cube_position, cube_orientation = self._cube.get_world_pose()
+        franka_position, franka_orientation = self._robot.get_world_pose()
         tool_position, tool_orientation = self._planner.get_tool_world_pose()
+        axis_i, axis_j, axis_k = get_cube_canonical_axes(
+            cube_position,
+            cube_orientation,
+            franka_position,
+            franka_orientation,
+        )
+        canonical_basis = np.column_stack((axis_i, axis_j, axis_k))
+        current_cube_rotation = pose_to_matrix(
+            np.zeros(3),
+            cube_orientation,
+        )[:3, :3]
+        franka_rotation = pose_to_matrix(
+            np.zeros(3),
+            franka_orientation,
+        )[:3, :3]
+        canonical_axes_in_cube = current_cube_rotation.T @ canonical_basis
+        target_cube_transform = np.eye(4)
+        target_cube_transform[:3, :3] = (
+            franka_rotation @ canonical_axes_in_cube.T
+        )
+        _, target_cube_orientation = matrix_to_pose(
+            target_cube_transform
+        )
+        if not np.allclose(
+            target_cube_transform[:3, :3] @ canonical_axes_in_cube,
+            franka_rotation,
+            atol=1e-6,
+        ):
+            raise RuntimeError(
+                "Failed to align canonical cube axes with the Franka frame."
+            )
+
         relative_position, relative_orientation = relative_pose(
             cube_position,
             cube_orientation,
@@ -169,7 +211,7 @@ class PlaceState(PnPState):
             tool_orientation,
         )
         target_cube_position, target_cube_orientation = (
-            self._create_target_cube_pose()
+            self._create_target_cube_pose(target_cube_orientation)
         )
         position, orientation = compose_poses(
             target_cube_position,
