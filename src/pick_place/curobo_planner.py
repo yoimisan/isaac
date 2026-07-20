@@ -152,10 +152,14 @@ class CuroboPlanner:
             enabled=enabled,
         )
 
-    def prepare_obstacle_for_manipulation(self, name: str) -> None:
-        """Synchronize a target object, then exclude it from world collisions."""
+    def set_obstacle_collision_enabled(
+        self,
+        name: str,
+        enabled: bool,
+    ) -> None:
+        """Synchronize an obstacle and set its CuRobo collision state."""
         self._world_registry.sync(name)
-        self._world_registry.set_enabled(name, False)
+        self._world_registry.set_enabled(name, enabled)
 
     def reset_episode(self, attached_object_name: str = "/World/Cube") -> None:
         """Clear a stale attachment and restore the manipulated object as an obstacle."""

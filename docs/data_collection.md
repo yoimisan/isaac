@@ -72,6 +72,26 @@ python.sh src/pnp.py \
   --record-fps 60
 ```
 
+Clean collection is the default. To collect state-aware perturbed rollouts,
+enable the Naughty Ghost explicitly and use a separate staging root:
+
+```bash
+python.sh src/pnp.py \
+  --record \
+  --perturb \
+  --perturb-seed 0 \
+  --perturb-min-attacks 0 \
+  --perturb-max-attacks 5 \
+  --record-root logs/data_collection/pnp_perturbed_raw \
+  --record-episodes 10
+```
+
+The staging schema records `collection_mode` and the perturbation seed and
+attack-count range. It rejects attempts to append clean and perturbed episodes
+to the same root, preventing accidental contamination of the clean dataset.
+The current metadata describes the configured policy; individual disturbance
+events remain visible in the Isaac log but are not yet stored frame-by-frame.
+
 The default resolution is 640 by 480. Override it with
 `--camera-width` and `--camera-height`. An episode ends only after `ReturnState`
 confirms that the robot has reached the joint pose captured at reset.
@@ -176,9 +196,9 @@ tick:  ghost step -> task controller forward/apply
        -> recorder sample -> world step(render=True)
 ```
 
-The current `_ENABLE_RECOVERY_TEST_PERTURBATION` block is only an earlier manual
-recovery probe. Remove it when the Naughty Ghost branch is integrated instead
-of enabling both perturbation paths.
+The Naughty Ghost is disabled unless `--perturb` is supplied, so the same
+runtime can collect clean and perturbed rollouts without maintaining two task
+controller implementations.
 
 `CameraSensor` currently exposes teardown through object destruction rather
 than a public `destroy()` method, so the camera rig drops its last sensor

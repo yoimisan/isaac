@@ -5,13 +5,21 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import carb
-import numpy as np
 from isaacsim import SimulationApp
 from isaacsim.core.api import World
 from isaacsim.core.api.objects import DynamicCuboid
+from isaacsim.core.prims import SingleGeometryPrim
 
+from adversary.background import NoBackgroundDisturbance
+from adversary.executor import IsaacSimDisturbanceExecutor
+from adversary.ghost import NaughtyGhost
+from adversary.types import (
+    ObjectPoseView,
+    TaskObjectDisturbanceContext,
+    TaskStateView,
+)
 from pick_place.controller import PnPController
-from pick_place.states import PickPlacePhase
+from pick_place.disturbance_policy import PickPlaceTaskObjectDisturbancePolicy
 from pick_place.task import PickPlaceTask
 
 if TYPE_CHECKING:
@@ -19,32 +27,67 @@ if TYPE_CHECKING:
     from data_collection.runtime import DataCollectionRuntime
 
 
-_ENABLE_RECOVERY_TEST_PERTURBATION = False
-_PERTURB_AFTER_APPROACH_PERCENT = 0.5
-_PERTURB_CUBE_Y_OFFSET = 0.12
-
-
-def _apply_recovery_test_perturbation(cube: DynamicCuboid) -> None:
-    """Move the cube once to validate observation-driven state recovery."""
-    position, orientation = cube.get_world_pose()
-    perturbed_position = np.asarray(position).copy()
-    direction = -1.0 if perturbed_position[1] > 0.0 else 1.0
-    perturbed_position[1] += direction * _PERTURB_CUBE_Y_OFFSET
-    cube.set_world_pose(
-        position=perturbed_position,
-        orientation=orientation,
+def _create_naughty_ghost(
+    cube: DynamicCuboid,
+    *,
+    seed: int | None,
+    attack_count_range: tuple[int, int],
+) -> NaughtyGhost:
+    """Build the optional PnP task-object disturbance channel."""
+    return NaughtyGhost(
+        executor=IsaacSimDisturbanceExecutor(objects={"cube": cube}),
+        background_policy=NoBackgroundDisturbance(),
+        task_object_policy=PickPlaceTaskObjectDisturbancePolicy(
+            target_name="cube",
+            target_region_name="target_region",
+            target_half_clearance=(
+                PickPlaceTask.TARGET_SIZE - PickPlaceTask.CUBE_SIZE
+            )
+            / 2.0,
+            workspace_x=PickPlaceTask.WORKSPACE_X,
+            workspace_y=PickPlaceTask.WORKSPACE_Y,
+            seed=seed,
+            attack_count_range=attack_count_range,
+        ),
     )
-    carb.log_warn(
-        "Applied recovery-test perturbation: "
-        f"cube moved from {position} to {perturbed_position}."
+
+
+def _observe_task_object_context(
+    controller: PnPController,
+    cube: DynamicCuboid,
+    target_region: SingleGeometryPrim,
+) -> TaskObjectDisturbanceContext:
+    """Build a pure-data snapshot for the PnP naughty policy."""
+    cube_position, cube_orientation = cube.get_world_pose()
+    target_position, target_orientation = target_region.get_world_pose()
+    return TaskObjectDisturbanceContext(
+        task_state=TaskStateView(
+            task_name="pick_place",
+            state_name=controller.phase.name,
+            state_entry_id=controller.state_entry_id,
+        ),
+        objects={
+            "cube": ObjectPoseView(
+                position=tuple(float(value) for value in cube_position),
+                orientation=tuple(float(value) for value in cube_orientation),
+            ),
+            "target_region": ObjectPoseView(
+                position=tuple(float(value) for value in target_position),
+                orientation=tuple(float(value) for value in target_orientation),
+            ),
+        },
     )
 
 
 def run(
     simulation_app: SimulationApp,
     data_collection_config: DataCollectionConfig | None = None,
+    *,
+    enable_naughty_ghost: bool = False,
+    naughty_seed: int | None = 0,
+    naughty_attack_count_range: tuple[int, int] = (0, 5),
 ) -> None:
-    """Run the interactive pick-and-place simulation."""
+    """Run clean or perturbed pick-and-place, optionally recording episodes."""
     world = World(stage_units_in_meters=1.0)
     task = PickPlaceTask(name="PNP")
     world.add_task(task)
@@ -54,6 +97,7 @@ def run(
 
     franka = world.scene.get_object("franka")
     cube = world.scene.get_object("cube")
+    target_region = world.scene.get_object("target_region")
     controller = PnPController(
         name="pnp_controller",
         robot=franka,
@@ -73,13 +117,21 @@ def run(
             articulation_controller,
         )
 
+    naughty_ghost = None
+    if enable_naughty_ghost:
+        naughty_ghost = _create_naughty_ghost(
+            cube,
+            seed=naughty_seed,
+            attack_count_range=naughty_attack_count_range,
+        )
+
     controller.reset()
+    if naughty_ghost is not None:
+        naughty_ghost.reset()
     if data_collection is not None:
         data_collection.begin_episode(world.current_time)
 
     reset_needed = False
-    perturbation_applied = False
-    approach_ticks = 0
     successful_episodes = 0
     try:
         while simulation_app.is_running():
@@ -93,23 +145,20 @@ def run(
                     if data_collection is not None:
                         data_collection.after_world_reset(world)
                     controller.reset()
+                    if naughty_ghost is not None:
+                        naughty_ghost.reset()
                     if data_collection is not None:
                         data_collection.begin_episode(world.current_time)
                     reset_needed = False
-                    perturbation_applied = False
-                    approach_ticks = 0
 
-                if _ENABLE_RECOVERY_TEST_PERTURBATION and not perturbation_applied:
-                    if controller.phase is PickPlacePhase.PLACE:
-                        trajectory = controller._state_objects[controller.phase]._trajectory
-                        if trajectory is not None:
-                            approach_ticks += 1
-                            length = len(trajectory)
-                            if approach_ticks >= int(_PERTURB_AFTER_APPROACH_PERCENT * length):
-                                _apply_recovery_test_perturbation(cube)
-                                perturbation_applied = True
-                    else:
-                        approach_ticks = 0
+                if naughty_ghost is not None:
+                    naughty_ghost.step(
+                        _observe_task_object_context(
+                            controller,
+                            cube,
+                            target_region,
+                        )
+                    )
 
                 task_state = controller.phase.name
                 action = controller.forward()
@@ -136,10 +185,9 @@ def run(
                 world.reset()
                 data_collection.after_world_reset(world)
                 controller.reset()
+                if naughty_ghost is not None:
+                    naughty_ghost.reset()
                 data_collection.begin_episode(world.current_time)
-                reset_needed = False
-                perturbation_applied = False
-                approach_ticks = 0
     finally:
         if data_collection is not None:
             data_collection.close()

@@ -230,6 +230,7 @@ class StagingEpisodeRecorder:
                 "episode_index": self._active_index,
                 "num_frames": len(self._states),
                 "task": self._config.task,
+                "collection_mode": self._config.collection_mode,
                 "success": bool(success),
                 "end_reason": str(end_reason),
             },
@@ -293,6 +294,17 @@ class StagingEpisodeRecorder:
             "fps": self._config.fps,
             "dlss_exec_mode": self._config.dlss_exec_mode,
             "robot_type": self._config.robot_type,
+            "collection_mode": self._config.collection_mode,
+            "perturbation": (
+                None
+                if self._config.perturbation_attack_count_range is None
+                else {
+                    "seed": self._config.perturbation_seed,
+                    "attack_count_range": list(
+                        self._config.perturbation_attack_count_range
+                    ),
+                }
+            ),
             "dof_names": list(self._articulation.dof_names),
             "features": {
                 **self._articulation.features,

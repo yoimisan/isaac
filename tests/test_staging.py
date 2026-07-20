@@ -190,6 +190,32 @@ class StagingEpisodeRecorderTest(unittest.TestCase):
             external_pos_y["position"][1],
             -external_neg_y["position"][1],
         )
+        self.assertEqual(metadata["collection_mode"], "clean")
+        self.assertIsNone(metadata["perturbation"])
+
+    def test_metadata_records_perturbation_configuration(self) -> None:
+        config = DataCollectionConfig(
+            root=self.root,
+            cameras=(self.camera,),
+            collection_mode="perturbed",
+            perturbation_seed=7,
+            perturbation_attack_count_range=(1, 3),
+        )
+        recorder = StagingEpisodeRecorder(
+            config,
+            articulation=_FakeArticulationSource(),
+            cameras=_FakeCameraRig(self.camera),
+        )
+        recorder.close()
+
+        metadata = json.loads(
+            (self.root / "dataset.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(metadata["collection_mode"], "perturbed")
+        self.assertEqual(
+            metadata["perturbation"],
+            {"seed": 7, "attack_count_range": [1, 3]},
+        )
 
 
 class DataCollectionConfigTest(unittest.TestCase):
@@ -226,6 +252,20 @@ class DataCollectionConfigTest(unittest.TestCase):
     def test_episode_count_must_be_positive(self) -> None:
         with self.assertRaisesRegex(ValueError, "num_episodes must be positive"):
             DataCollectionConfig(num_episodes=0)
+
+    def test_perturbed_collection_requires_valid_attack_range(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "requires perturbation_attack_count_range",
+        ):
+            DataCollectionConfig(collection_mode="perturbed")
+
+        config = DataCollectionConfig(
+            collection_mode="perturbed",
+            perturbation_seed=7,
+            perturbation_attack_count_range=(1, 3),
+        )
+        self.assertEqual(config.perturbation_attack_count_range, (1, 3))
 
     def test_dlss_mode_must_be_supported(self) -> None:
         with self.assertRaisesRegex(ValueError, "dlss_exec_mode must be"):

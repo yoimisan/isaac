@@ -8,6 +8,7 @@ from isaacsim.robot.manipulators.examples.franka import Franka
 
 from pick_place.curobo_planner import CuroboPlanner
 from pick_place.states.base import (
+    CubeCollisionMode,
     Perturbation,
     PickPlacePhase,
     PnPState,
@@ -19,6 +20,7 @@ class GraspState(PnPState):
     """Close the gripper and attach the cube to the CuRobo robot model."""
 
     phase = PickPlacePhase.GRASP
+    cube_collision_mode = CubeCollisionMode.IGNORED
 
     def __init__(
         self,
@@ -33,6 +35,15 @@ class GraspState(PnPState):
         self._planner = planner
         self._grasp_tolerance = grasp_tolerance
 
+    def is_success(self) -> bool:
+        """Return whether the cube remains within grasping distance."""
+        cube_position, _ = self._cube.get_world_pose()
+        tool_position, _ = self._planner.get_tool_world_pose()
+        return bool(
+            np.linalg.norm(cube_position - tool_position)
+            <= self._grasp_tolerance
+        )
+
     def detect_perturbation(self) -> Perturbation | None:
         """Detect a cube that moved out of reach before the gripper closes."""
         cube_position, _ = self._cube.get_world_pose()
@@ -46,13 +57,15 @@ class GraspState(PnPState):
         )
 
     def recovery_phase(self, perturbation: Perturbation) -> PickPlacePhase:
-        """Wait for the cube and arm to settle before reacquiring the cube."""
+        """Return directly to a fresh pre-grasp approach."""
         if perturbation.reason == "cube_moved_before_grasp":
-            return PickPlacePhase.WAIT_FOR_STABLE
+            return PickPlacePhase.APPROACH
         return super().recovery_phase(perturbation)
 
     def update(self) -> StateStep:
         """Issue the grasp operations and advance directly to lift."""
+        if not self.is_success():
+            return StateStep(next_phase=PickPlacePhase.APPROACH)
         self._robot.gripper.close()
         self._planner.attach_cube()
         return StateStep(next_phase=PickPlacePhase.LIFT)

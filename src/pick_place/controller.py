@@ -12,6 +12,7 @@ from isaacsim.robot.manipulators.examples.franka import Franka
 from pick_place.curobo_planner import CuroboPlanner
 from pick_place.states import (
     ApproachState,
+    CubeCollisionMode,
     DescendState,
     GraspState,
     IdleState,
@@ -21,7 +22,6 @@ from pick_place.states import (
     PnPState,
     ReleaseState,
     ReturnState,
-    WaitForStableState,
 )
 
 
@@ -45,6 +45,7 @@ class PnPController(BaseController):
         self._world = world
         self._approach_tolerance = approach_tolerance
         self._phase = PickPlacePhase.IDLE
+        self._state_entry_id = 0
 
         self._planner = CuroboPlanner(world.scene, robot)
         self._planner.register_dynamic_obstacle(cube)
@@ -54,6 +55,7 @@ class PnPController(BaseController):
         """Reset state-local data and begin a fresh approach."""
         super().reset()
         self._planner.reset_episode()
+        self._state_entry_id = 0
         self._reset_phase_state()
         self._transition_to(PickPlacePhase.APPROACH)
 
@@ -66,9 +68,18 @@ class PnPController(BaseController):
         """Return the active phase for observation and validation tooling."""
         return self._phase
 
+    @property
+    def state_entry_id(self) -> int:
+        """Return the episode-local identifier of the active state entry."""
+        return self._state_entry_id
+
     def is_complete(self) -> bool:
         """Return whether the cube was released and the arm returned to its reset pose."""
         return self._return_state.is_complete
+
+    def is_current_state_success(self) -> bool:
+        """Return whether the active state's goal is currently satisfied."""
+        return self._state_objects[self._phase].is_success()
 
     def _reset_phase_state(self) -> None:
         self._phase = PickPlacePhase.IDLE
@@ -81,11 +92,6 @@ class PnPController(BaseController):
             cube=self._cube,
             planner=self._planner,
             approach_tolerance=self._approach_tolerance,
-        )
-        wait_for_stable_state = WaitForStableState(
-            robot=self._robot,
-            cube=self._cube,
-            arm_joint_indices=self._planner.isaac_arm_joint_indices,
         )
         descend_state = DescendState(
             cube=self._cube,
@@ -118,7 +124,6 @@ class PnPController(BaseController):
         )
         states: tuple[PnPState, ...] = (
             IdleState(),
-            wait_for_stable_state,
             approach_state,
             descend_state,
             GraspState(
@@ -145,6 +150,14 @@ class PnPController(BaseController):
             raise RuntimeError(
                 f"Missing pick-and-place state objects: {missing_phases}"
             )
+        for state in states:
+            if not isinstance(
+                getattr(state, "cube_collision_mode", None),
+                CubeCollisionMode,
+            ):
+                raise RuntimeError(
+                    f"{type(state).__name__} has no valid cube collision mode."
+                )
 
     def _forward_state_object(self) -> ArticulationAction | None:
         """Validate and advance the active state object by one tick."""
@@ -154,7 +167,7 @@ class PnPController(BaseController):
             recovery_phase = state.recovery_phase(perturbation)
             carb.log_warn(
                 f"PnP state {self._phase.name} invalidated: "
-                f"{perturbation.reason}; metrics={dict(perturbation.metrics)}"
+                f"{perturbation.reason}; metrics={dict(perturbation.metrics)}."
             )
             self._transition_to(recovery_phase)
             return None
@@ -172,11 +185,21 @@ class PnPController(BaseController):
             previous_state.exit()
 
         self._phase = next_phase
+        self._state_entry_id += 1
         next_state = self._state_objects.get(next_phase)
         if next_state is not None:
+            self._apply_cube_collision_mode(next_state.cube_collision_mode)
             next_state.enter()
 
         if previous_phase is not next_phase:
-            carb.log_info(
+            carb.log_warn(
                 f"PnP phase transition: {previous_phase.name} -> {next_phase.name}"
             )
+
+    def _apply_cube_collision_mode(self, mode: CubeCollisionMode) -> None:
+        """Apply one state's cube policy to the CuRobo collision world."""
+        world_collision_enabled = mode is CubeCollisionMode.WORLD_OBSTACLE
+        self._planner.set_obstacle_collision_enabled(
+            self._cube.prim_path,
+            world_collision_enabled,
+        )

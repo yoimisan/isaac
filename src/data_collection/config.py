@@ -125,6 +125,9 @@ class DataCollectionConfig:
     fps: int = 60
     task: str = "Pick up the cube and place it in the target region"
     robot_type: str = "franka"
+    collection_mode: str = "clean"
+    perturbation_seed: int | None = None
+    perturbation_attack_count_range: tuple[int, int] | None = None
     num_episodes: int = 1
     save_failed_episodes: bool = False
     dlss_exec_mode: int = 2
@@ -142,6 +145,36 @@ class DataCollectionConfig:
                 "Data-collection num_episodes must be positive; "
                 f"got {self.num_episodes}."
             )
+        if self.collection_mode not in {"clean", "perturbed"}:
+            raise ValueError(
+                "collection_mode must be either 'clean' or 'perturbed'."
+            )
+        if self.collection_mode == "clean":
+            if self.perturbation_attack_count_range is not None:
+                raise ValueError(
+                    "Clean collection cannot define a perturbation attack range."
+                )
+            if self.perturbation_seed is not None:
+                raise ValueError(
+                    "Clean collection cannot define a perturbation seed."
+                )
+        elif self.perturbation_attack_count_range is None:
+            raise ValueError(
+                "Perturbed collection requires perturbation_attack_count_range."
+            )
+        if self.perturbation_attack_count_range is not None:
+            if len(self.perturbation_attack_count_range) != 2:
+                raise ValueError(
+                    "perturbation_attack_count_range must contain two values."
+                )
+            minimum_attacks, maximum_attacks = (
+                self.perturbation_attack_count_range
+            )
+            if minimum_attacks < 0 or minimum_attacks > maximum_attacks:
+                raise ValueError(
+                    "perturbation_attack_count_range must contain nonnegative "
+                    "increasing bounds."
+                )
         if not self.cameras:
             raise ValueError("At least one data-collection camera is required.")
         camera_names = [camera.name for camera in self.cameras]
