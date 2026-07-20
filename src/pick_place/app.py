@@ -80,6 +80,7 @@ def run(
     reset_needed = False
     perturbation_applied = False
     approach_ticks = 0
+    successful_episodes = 0
     try:
         while simulation_app.is_running():
             if world.is_stopped() and not reset_needed:
@@ -121,12 +122,24 @@ def run(
                     )
 
             world.step(render=True)
-            if (
-                data_collection is not None
-                and controller.is_complete()
-                and task.is_done()
-            ):
+            if data_collection is not None and controller.is_complete():
                 data_collection.finish_successful_episode()
+                successful_episodes += 1
+                carb.log_info(
+                    "Automatic collection completed "
+                    f"episode {successful_episodes}/"
+                    f"{data_collection.num_episodes}."
+                )
+                if successful_episodes >= data_collection.num_episodes:
+                    break
+
+                world.reset()
+                data_collection.after_world_reset(world)
+                controller.reset()
+                data_collection.begin_episode(world.current_time)
+                reset_needed = False
+                perturbation_applied = False
+                approach_ticks = 0
     finally:
         if data_collection is not None:
             data_collection.close()

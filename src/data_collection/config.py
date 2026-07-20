@@ -63,6 +63,7 @@ class DataCollectionConfig:
     fps: int = 60
     task: str = "Pick up the cube and place it in the target region"
     robot_type: str = "franka"
+    num_episodes: int = 1
     save_failed_episodes: bool = False
     image_writer_threads: int = 2
     max_pending_image_writes: int = 64
@@ -73,6 +74,11 @@ class DataCollectionConfig:
     def __post_init__(self) -> None:
         if self.fps <= 0:
             raise ValueError(f"Data-collection fps must be positive; got {self.fps}.")
+        if self.num_episodes <= 0:
+            raise ValueError(
+                "Data-collection num_episodes must be positive; "
+                f"got {self.num_episodes}."
+            )
         if not self.cameras:
             raise ValueError("At least one data-collection camera is required.")
         camera_names = [camera.name for camera in self.cameras]

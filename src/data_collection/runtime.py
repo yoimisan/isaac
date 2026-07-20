@@ -43,6 +43,11 @@ class DataCollectionRuntime:
             raise
         carb.log_info(f"Recording staging episodes under {self._recorder.root}.")
 
+    @property
+    def num_episodes(self) -> int:
+        """Return the requested number of successful automatic rollouts."""
+        return self._config.num_episodes
+
     def begin_episode(self, simulation_time: float) -> None:
         self._recorder.begin_episode(simulation_time)
 

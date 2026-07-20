@@ -158,6 +158,12 @@ class StagingEpisodeRecorderTest(unittest.TestCase):
         recorder.close()
 
 
+class DataCollectionConfigTest(unittest.TestCase):
+    def test_episode_count_must_be_positive(self) -> None:
+        with self.assertRaisesRegex(ValueError, "num_episodes must be positive"):
+            DataCollectionConfig(num_episodes=0)
+
+
 class ArticulationFrameSourceTest(unittest.TestCase):
     def test_nan_targets_hold_the_observed_joint_position(self) -> None:
         robot = SimpleNamespace(

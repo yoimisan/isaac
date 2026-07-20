@@ -64,12 +64,19 @@ Launch through the usual Isaac Sim Python entry point and add `--record`:
 python.sh src/pnp.py \
   --record \
   --record-root logs/data_collection/pnp_raw \
+  --record-episodes 10 \
   --record-fps 60
 ```
 
 The default resolution is 320 by 240. Override it with
-`--camera-width` and `--camera-height`. A clean PnP completion publishes an
-episode. Stop/start resets discard an incomplete episode unless
+`--camera-width` and `--camera-height`. An episode ends only after `ReturnState`
+confirms that the robot has reached the joint pose captured at reset.
+Successful completion saves the episode and
+automatically resets the world for the next rollout. Collection exits after
+`--record-episodes` successful episodes; its default is one. This completion
+condition deliberately does not depend on an additional `task.is_done()` check.
+
+Manual stop/start resets discard an incomplete episode unless
 `--save-failed-episodes` is set. With that flag, application shutdown also
 publishes a non-empty active episode with `next.success=false`.
 

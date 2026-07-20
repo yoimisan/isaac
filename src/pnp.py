@@ -21,6 +21,12 @@ def _parse_args() -> argparse.Namespace:
         / "pnp_raw",
     )
     parser.add_argument("--record-fps", type=int, default=60)
+    parser.add_argument(
+        "--record-episodes",
+        type=int,
+        default=1,
+        help="Number of successful episodes to collect before exiting.",
+    )
     parser.add_argument("--camera-width", type=int, default=320)
     parser.add_argument("--camera-height", type=int, default=240)
     parser.add_argument("--save-failed-episodes", action="store_true")
@@ -48,6 +54,7 @@ def main() -> None:
             enabled=True,
             root=args.record_root,
             fps=args.record_fps,
+            num_episodes=args.record_episodes,
             save_failed_episodes=args.save_failed_episodes,
             cameras=default_cameras(resolution),
         )
