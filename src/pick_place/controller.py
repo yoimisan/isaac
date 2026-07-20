@@ -45,6 +45,7 @@ class PnPController(BaseController):
         self._world = world
         self._approach_tolerance = approach_tolerance
         self._phase = PickPlacePhase.IDLE
+        self._state_entry_id = 0
 
         self._planner = CuroboPlanner(world.scene, robot)
         self._planner.register_dynamic_obstacle(cube)
@@ -54,6 +55,7 @@ class PnPController(BaseController):
         """Reset state-local data and begin a fresh approach."""
         super().reset()
         self._planner.reset_episode()
+        self._state_entry_id = 0
         self._reset_phase_state()
         self._transition_to(PickPlacePhase.APPROACH)
 
@@ -65,6 +67,11 @@ class PnPController(BaseController):
     def phase(self) -> PickPlacePhase:
         """Return the active phase for observation and validation tooling."""
         return self._phase
+
+    @property
+    def state_entry_id(self) -> int:
+        """Return the episode-local identifier of the active state entry."""
+        return self._state_entry_id
 
     def is_complete(self) -> bool:
         """Return whether the cube was released and the arm returned to its reset pose."""
@@ -178,6 +185,7 @@ class PnPController(BaseController):
             previous_state.exit()
 
         self._phase = next_phase
+        self._state_entry_id += 1
         next_state = self._state_objects.get(next_phase)
         if next_state is not None:
             self._apply_cube_collision_mode(next_state.cube_collision_mode)

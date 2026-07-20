@@ -48,7 +48,7 @@ class OneShotStateObjectPerturbation:
         self.reset()
 
     def reset(self) -> None:
-        self._active_state: str | None = None
+        self._active_state_entry: tuple[str, int] | None = None
         self._steps_in_state = 0
         self._has_fired = False
 
@@ -57,8 +57,9 @@ class OneShotStateObjectPerturbation:
         context: TaskObjectDisturbanceContext,
     ) -> DisturbanceCommand | None:
         task_state = context.task_state
-        if task_state.state_name != self._active_state:
-            self._active_state = task_state.state_name
+        state_entry = (task_state.state_name, task_state.state_entry_id)
+        if state_entry != self._active_state_entry:
+            self._active_state_entry = state_entry
             self._steps_in_state = 1
         else:
             self._steps_in_state += 1

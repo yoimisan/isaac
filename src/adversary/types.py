@@ -21,11 +21,12 @@ class TaskStateView:
 
     task_name: str
     state_name: str
+    state_entry_id: int = 0
 
 
 @dataclass(frozen=True)
-class RigidObjectView:
-    """Simulator-independent pose snapshot for one task object."""
+class ObjectPoseView:
+    """Simulator-independent pose snapshot for one observed scene object."""
 
     position: tuple[float, float, float]
     orientation: tuple[float, float, float, float]
@@ -36,7 +37,7 @@ class TaskObjectDisturbanceContext:
     """Read-only input available to task-object disturbance policies."""
 
     task_state: TaskStateView
-    objects: Mapping[str, RigidObjectView]
+    objects: Mapping[str, ObjectPoseView]
 
 
 @dataclass(frozen=True)
