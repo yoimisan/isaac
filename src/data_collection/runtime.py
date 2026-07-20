@@ -25,7 +25,10 @@ class DataCollectionRuntime:
     ) -> None:
         self._config = config
         self._validate_recording_rate(world)
-        self._cameras = RgbCameraRig(config.cameras)
+        self._cameras = RgbCameraRig(
+            config.cameras,
+            dlss_exec_mode=config.dlss_exec_mode,
+        )
         try:
             self._recorder = StagingEpisodeRecorder(
                 config,

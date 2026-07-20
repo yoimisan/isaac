@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isclose, sqrt
 from pathlib import Path
 
 
 @dataclass(frozen=True)
 class CameraConfig:
-    """Describe one fixed RGB camera without binding it to a task."""
+    """Describe one world-fixed or parent-relative RGB camera."""
 
     name: str
     prim_path: str
-    position: tuple[float, float, float]
-    look_at: tuple[float, float, float]
-    resolution: tuple[int, int] = (240, 320)
-    focal_length: float = 24.0
+    position: tuple[float, float, float] | None = None
+    look_at: tuple[float, float, float] | None = None
+    translation: tuple[float, float, float] | None = None
+    orientation: tuple[float, float, float, float] | None = None
+    resolution: tuple[int, int] = (480, 640)
+    focal_length_m: float = 0.024
+    horizontal_aperture_m: float = 0.036
     clipping_range: tuple[float, float] = (0.01, 100.0)
 
     def __post_init__(self) -> None:
@@ -25,10 +29,42 @@ class CameraConfig:
             )
         if not self.prim_path.startswith("/"):
             raise ValueError("Camera prim_path must be an absolute USD path.")
+        has_world_pose = self.position is not None or self.look_at is not None
+        has_local_pose = (
+            self.translation is not None or self.orientation is not None
+        )
+        if has_world_pose and has_local_pose:
+            raise ValueError(
+                "Camera must use either position/look_at or "
+                "translation/orientation, not both."
+            )
+        if has_world_pose:
+            if self.position is None or self.look_at is None:
+                raise ValueError("World-fixed cameras require position and look_at.")
+            if len(self.position) != 3 or len(self.look_at) != 3:
+                raise ValueError("Camera position and look_at must be 3D vectors.")
+            if self.position == self.look_at:
+                raise ValueError("Camera position and look_at must differ.")
+        elif has_local_pose:
+            if self.translation is None or self.orientation is None:
+                raise ValueError(
+                    "Parent-relative cameras require translation and orientation."
+                )
+            if len(self.translation) != 3 or len(self.orientation) != 4:
+                raise ValueError(
+                    "Camera translation must be 3D and orientation must be wxyz."
+                )
+            quaternion_norm = sqrt(sum(value * value for value in self.orientation))
+            if not isclose(quaternion_norm, 1.0, abs_tol=1e-5):
+                raise ValueError("Camera orientation quaternion must be normalized.")
+        else:
+            raise ValueError("Camera pose is missing.")
         if any(dimension <= 0 for dimension in self.resolution):
             raise ValueError(f"Camera resolution must be positive: {self.resolution}.")
-        if self.focal_length <= 0.0:
-            raise ValueError("Camera focal_length must be positive.")
+        if self.focal_length_m <= 0.0:
+            raise ValueError("Camera focal_length_m must be positive.")
+        if self.horizontal_aperture_m <= 0.0:
+            raise ValueError("Camera horizontal_aperture_m must be positive.")
         near, far = self.clipping_range
         if near <= 0.0 or far <= near:
             raise ValueError(f"Invalid camera clipping range: {self.clipping_range}.")
@@ -38,18 +74,44 @@ class CameraConfig:
         """Return the conventional LeRobot feature name for this camera."""
         return f"observation.images.{self.name}"
 
+    @property
+    def pose_frame(self) -> str:
+        """Return whether the configured pose is in world or parent coordinates."""
+        return "world" if self.position is not None else "parent"
+
 
 def default_cameras(
-    resolution: tuple[int, int] = (240, 320),
+    resolution: tuple[int, int] = (480, 640),
 ) -> tuple[CameraConfig, ...]:
-    """Return the conservative first camera setup for tabletop tasks."""
+    """Return one wrist view and two symmetric external tabletop views."""
+    half_sqrt_two = sqrt(0.5)
     return (
         CameraConfig(
-            name="overview",
-            prim_path="/World/DataCollection/Cameras/Overview",
-            position=(1.15, 0.75, 0.85),
+            name="wrist",
+            prim_path="/World/Franka/panda_hand/DataCollectionWristCamera",
+            translation=(0.06, 0.0, 0.035),
+            # Camera -Z looks along panda_hand +Z. Image-right follows the
+            # gripper's +Y opening axis and image-up follows hand +X.
+            orientation=(0.0, half_sqrt_two, half_sqrt_two, 0.0),
+            resolution=resolution,
+            focal_length_m=0.018,
+            clipping_range=(0.01, 5.0),
+        ),
+        CameraConfig(
+            name="external_pos_y",
+            prim_path="/World/DataCollection/Cameras/ExternalPosY",
+            position=(0.95, 0.55, 0.75),
             look_at=(0.48, 0.0, 0.08),
             resolution=resolution,
+            focal_length_m=0.028,
+        ),
+        CameraConfig(
+            name="external_neg_y",
+            prim_path="/World/DataCollection/Cameras/ExternalNegY",
+            position=(0.95, -0.55, 0.75),
+            look_at=(0.48, 0.0, 0.08),
+            resolution=resolution,
+            focal_length_m=0.028,
         ),
     )
 
@@ -65,8 +127,9 @@ class DataCollectionConfig:
     robot_type: str = "franka"
     num_episodes: int = 1
     save_failed_episodes: bool = False
-    image_writer_threads: int = 2
-    max_pending_image_writes: int = 64
+    dlss_exec_mode: int = 2
+    image_writer_threads: int = 4
+    max_pending_image_writes: int = 128
     camera_warmup_max_steps: int = 10
     camera_warmup_settle_steps: int = 3
     cameras: tuple[CameraConfig, ...] = field(default_factory=default_cameras)
@@ -84,6 +147,11 @@ class DataCollectionConfig:
         camera_names = [camera.name for camera in self.cameras]
         if len(camera_names) != len(set(camera_names)):
             raise ValueError(f"Camera names must be unique; got {camera_names}.")
+        if self.dlss_exec_mode not in range(4):
+            raise ValueError(
+                "dlss_exec_mode must be 0 (Performance), 1 (Balanced), "
+                "2 (Quality), or 3 (Auto)."
+            )
         if self.image_writer_threads <= 0:
             raise ValueError("image_writer_threads must be positive.")
         if self.max_pending_image_writes <= 0:

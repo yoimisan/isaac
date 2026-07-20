@@ -27,8 +27,8 @@ def _parse_args() -> argparse.Namespace:
         default=1,
         help="Number of successful episodes to collect before exiting.",
     )
-    parser.add_argument("--camera-width", type=int, default=320)
-    parser.add_argument("--camera-height", type=int, default=240)
+    parser.add_argument("--camera-width", type=int, default=640)
+    parser.add_argument("--camera-height", type=int, default=480)
     parser.add_argument("--save-failed-episodes", action="store_true")
     args, _ = parser.parse_known_args()
     return args

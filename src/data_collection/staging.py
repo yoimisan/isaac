@@ -291,6 +291,7 @@ class StagingEpisodeRecorder:
         metadata = {
             "format": _FORMAT_VERSION,
             "fps": self._config.fps,
+            "dlss_exec_mode": self._config.dlss_exec_mode,
             "robot_type": self._config.robot_type,
             "dof_names": list(self._articulation.dof_names),
             "features": {
@@ -303,9 +304,25 @@ class StagingEpisodeRecorder:
                     "feature_key": camera.feature_key,
                     "resolution": list(camera.resolution),
                     "prim_path": camera.prim_path,
-                    "position": list(camera.position),
-                    "look_at": list(camera.look_at),
-                    "focal_length": camera.focal_length,
+                    "pose_frame": camera.pose_frame,
+                    "position": (
+                        None if camera.position is None else list(camera.position)
+                    ),
+                    "look_at": (
+                        None if camera.look_at is None else list(camera.look_at)
+                    ),
+                    "translation": (
+                        None
+                        if camera.translation is None
+                        else list(camera.translation)
+                    ),
+                    "orientation": (
+                        None
+                        if camera.orientation is None
+                        else list(camera.orientation)
+                    ),
+                    "focal_length_m": camera.focal_length_m,
+                    "horizontal_aperture_m": camera.horizontal_aperture_m,
                     "clipping_range": list(camera.clipping_range),
                 }
                 for camera in self._config.cameras

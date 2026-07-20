@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +11,11 @@ from unittest.mock import patch
 
 import numpy as np
 
-from data_collection.config import CameraConfig, DataCollectionConfig
+from data_collection.config import (
+    CameraConfig,
+    DataCollectionConfig,
+    default_cameras,
+)
 from data_collection.staging import ArticulationFrameSource, StagingEpisodeRecorder
 
 
@@ -37,22 +42,27 @@ class _FakeArticulationSource:
 
 
 class _FakeCameraRig:
-    def __init__(self, camera: CameraConfig) -> None:
-        self._camera = camera
+    def __init__(
+        self,
+        cameras: CameraConfig | tuple[CameraConfig, ...],
+    ) -> None:
+        self._cameras = cameras if isinstance(cameras, tuple) else (cameras,)
         self.features = {
             camera.feature_key: {
                 "dtype": "video",
                 "shape": [*camera.resolution, 3],
                 "names": ["height", "width", "channels"],
             }
+            for camera in self._cameras
         }
 
     def capture(self) -> dict[str, np.ndarray]:
         return {
-            self._camera.feature_key: np.zeros(
-                (*self._camera.resolution, 3),
+            camera.feature_key: np.zeros(
+                (*camera.resolution, 3),
                 dtype=np.uint8,
             )
+            for camera in self._cameras
         }
 
 
@@ -157,11 +167,69 @@ class StagingEpisodeRecorderTest(unittest.TestCase):
             recorder.record_frame(0.0, "APPROACH")
         recorder.close()
 
+    def test_metadata_preserves_world_and_parent_relative_poses(self) -> None:
+        cameras = default_cameras(resolution=(4, 5))
+        config = DataCollectionConfig(root=self.root, cameras=cameras)
+        recorder = StagingEpisodeRecorder(
+            config,
+            articulation=_FakeArticulationSource(),
+            cameras=_FakeCameraRig(cameras),
+        )
+        recorder.close()
+
+        metadata = json.loads(
+            (self.root / "dataset.json").read_text(encoding="utf-8")
+        )
+        wrist, external_pos_y, external_neg_y = metadata["cameras"]
+        self.assertEqual(wrist["pose_frame"], "parent")
+        self.assertIsNone(wrist["position"])
+        self.assertEqual(wrist["translation"], [0.06, 0.0, 0.035])
+        self.assertEqual(external_pos_y["pose_frame"], "world")
+        self.assertIsNone(external_pos_y["translation"])
+        self.assertEqual(
+            external_pos_y["position"][1],
+            -external_neg_y["position"][1],
+        )
+
 
 class DataCollectionConfigTest(unittest.TestCase):
+    def test_default_rig_has_wrist_and_symmetric_external_cameras(self) -> None:
+        config = DataCollectionConfig()
+        cameras = config.cameras
+
+        self.assertEqual(config.dlss_exec_mode, 2)
+        self.assertTrue(all(camera.resolution == (480, 640) for camera in cameras))
+        self.assertEqual(
+            [camera.name for camera in cameras],
+            ["wrist", "external_pos_y", "external_neg_y"],
+        )
+        self.assertEqual(cameras[0].pose_frame, "parent")
+        self.assertEqual(cameras[1].pose_frame, "world")
+        self.assertEqual(cameras[1].position[0], cameras[2].position[0])
+        self.assertEqual(cameras[1].position[1], -cameras[2].position[1])
+        self.assertEqual(cameras[1].focal_length_m, 0.028)
+        self.assertEqual(cameras[2].focal_length_m, 0.028)
+
+    def test_camera_pose_must_be_world_or_parent_relative(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Camera pose is missing"):
+            CameraConfig(name="missing", prim_path="/World/Missing")
+        with self.assertRaisesRegex(ValueError, "either position/look_at"):
+            CameraConfig(
+                name="mixed",
+                prim_path="/World/Mixed",
+                position=(1.0, 0.0, 1.0),
+                look_at=(0.0, 0.0, 0.0),
+                translation=(0.0, 0.0, 0.0),
+                orientation=(1.0, 0.0, 0.0, 0.0),
+            )
+
     def test_episode_count_must_be_positive(self) -> None:
         with self.assertRaisesRegex(ValueError, "num_episodes must be positive"):
             DataCollectionConfig(num_episodes=0)
+
+    def test_dlss_mode_must_be_supported(self) -> None:
+        with self.assertRaisesRegex(ValueError, "dlss_exec_mode must be"):
+            DataCollectionConfig(dlss_exec_mode=4)
 
 
 class ArticulationFrameSourceTest(unittest.TestCase):

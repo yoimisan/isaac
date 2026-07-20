@@ -16,9 +16,11 @@ The RGB camera uses Isaac Sim 6's `RtxCamera` and `CameraSensor`. The existing
 `rep.orchestrator.step()`, because that would add a second simulation/render
 advance to the task loop.
 
-The first camera is a fixed `overview` camera. The camera rig already accepts a
-tuple of camera configs, so a wrist or side camera can be added without changing
-the recorder.
+The default rig contains three RGB cameras. `wrist` is parented to
+`/World/Franka/panda_hand` and therefore follows the gripper. The two fixed
+external cameras observe the same workspace center from symmetric `+X/+Y` and
+`+X/-Y` positions. Adding or removing camera configs does not change the
+recorder.
 
 ## Why export in a separate process
 
@@ -48,7 +50,9 @@ diagnostics. LeRobot timestamps are intentionally regenerated as
   `articulation_controller.get_applied_action()` after all task and gripper
   control calls. This is deliberately not the seven-dimensional CuRobo action
   returned by some PnP states.
-- `observation.images.overview`: RGB `uint8`, HWC.
+- `observation.images.wrist`: moving wrist RGB, `uint8`, HWC.
+- `observation.images.external_pos_y`: fixed `+X/+Y` RGB, `uint8`, HWC.
+- `observation.images.external_neg_y`: fixed `+X/-Y` RGB, `uint8`, HWC.
 - `next.done`: true on the last frame of every exported episode.
 - `next.success`: true on the last frame of a successful episode.
 - `task`: the natural-language task instruction used by LeRobot's task index.
@@ -68,7 +72,7 @@ python.sh src/pnp.py \
   --record-fps 60
 ```
 
-The default resolution is 320 by 240. Override it with
+The default resolution is 640 by 480. Override it with
 `--camera-width` and `--camera-height`. An episode ends only after `ReturnState`
 confirms that the robot has reached the joint pose captured at reset.
 Successful completion saves the episode and
@@ -85,6 +89,29 @@ execution, and then kept alive across ordinary world resets. RGB is copied from
 the Warp annotator buffer immediately so later renders cannot mutate a queued
 frame. If RGB becomes unavailable after warm-up, recording fails explicitly
 instead of silently creating a variable-rate episode.
+
+The default camera poses are:
+
+| Feature suffix | Pose | Optical setup |
+|---|---|---|
+| `wrist` | parent-relative `(0.06, 0.0, 0.035)` on `panda_hand` | 18 mm, looks along hand `+Z` |
+| `external_pos_y` | world `(0.95, 0.55, 0.75)` | 28 mm, looks at `(0.48, 0.0, 0.08)` |
+| `external_neg_y` | world `(0.95, -0.55, 0.75)` | 28 mm, looks at `(0.48, 0.0, 0.08)` |
+
+Optical lengths are stored in meters because the application creates a
+meter-unit stage: 18 mm is authored as `0.018` and 28 mm as `0.028`. The
+horizontal aperture is 36 mm (`0.036`), yielding approximately 90 degrees of
+horizontal field of view for the wrist camera and 65 degrees externally.
+
+Camera definitions are part of the staging schema. Use a fresh
+`--record-root` after changing this rig rather than appending three-camera
+episodes to an older one-camera staging dataset.
+
+Collection forces DLSS Quality mode (`rtx/post/dlss/execMode = 2`), matching
+Isaac Sim's SDG examples. At 640 by 480 this keeps DLSS's internal render input
+above its minimum dimension and avoids the low-resolution warning produced by
+the previous 320 by 240 Performance-mode setup. Four PNG workers and a bounded
+128-write queue absorb the additional three-camera encoding load.
 
 The first implementation requires `--record-fps` to equal the physics/control
 rate. Recording at 30 Hz while the task controller emits different commands at
@@ -120,7 +147,9 @@ meta/stats.json
 meta/tasks.parquet
 meta/episodes/chunk-000/file-000.parquet
 data/chunk-000/file-000.parquet
-videos/observation.images.overview/chunk-000/file-000.mp4
+videos/observation.images.wrist/chunk-000/file-000.mp4
+videos/observation.images.external_pos_y/chunk-000/file-000.mp4
+videos/observation.images.external_neg_y/chunk-000/file-000.mp4
 ```
 
 Use `--images` only for debugging when embedding images in Parquet is preferred
