@@ -1,0 +1,100 @@
+{
+  "asset": {
+    "author": "Klo Works",
+    "license": "royalty_free",
+    "name": "Fidget Cube",
+    "source": "BlenderKit",
+    "source_asset_base_id": "e1548130-3cef-4cbd-bd4a-0b5b43b4f020",
+    "source_asset_id": "483121ec-975c-49df-9633-4b7deb13eadd",
+    "source_url": "https://www.blenderkit.com/asset-gallery-detail/e1548130-3cef-4cbd-bd4a-0b5b43b4f020/"
+  },
+  "export": {
+    "blender_version": "5.2.0 LTS",
+    "bounds_max_m": [
+      0.023544080555438995,
+      0.02099529840052128,
+      0.045664601027965546
+    ],
+    "bounds_min_m": [
+      -0.021349729970097542,
+      -0.024598339572548866,
+      -7.320836714619361e-10
+    ],
+    "dimensions_m": [
+      0.04489381052553654,
+      0.045593637973070145,
+      0.04566460176004922
+    ],
+    "files": [
+      "fidget_cube_visual.usdc",
+      "textures/Fidget_Cube_Roughness.png"
+    ],
+    "generated_at_utc": "2026-07-20T03:09:56.389841+00:00",
+    "images": [
+      {
+        "name": "Fidget_Cube_Roughness.png",
+        "packed": true,
+        "size": [
+          4096,
+          4096
+        ]
+      }
+    ],
+    "material_conversion": "constant ShaderNodeRGB inputs baked into Principled Base Color",
+    "material_palette": {
+      "Color_mat": {
+        "linear_rgba": [
+          0.0205989982932806,
+          0.08898137509822845,
+          0.0,
+          1.0
+        ],
+        "source": "baked_shader_rgb"
+      },
+      "Cube_Color_mat": {
+        "linear_rgba": [
+          0.01960664987564087,
+          0.01960664987564087,
+          0.01960664987564087,
+          1.0
+        ],
+        "source": "baked_shader_rgb"
+      },
+      "Metal_mat": {
+        "linear_rgba": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "source": "principled_default"
+      }
+    },
+    "materials": [
+      "Color_mat",
+      "Cube_Color_mat",
+      "Metal_mat"
+    ],
+    "mesh_names": [
+      "analog",
+      "ball",
+      "button",
+      "click",
+      "cube",
+      "gears",
+      "gears1",
+      "gears2",
+      "turn"
+    ],
+    "meters_per_unit": 1.0,
+    "root_prim": "/FidgetCube",
+    "up_axis": "Z",
+    "usd": "fidget_cube_visual.usdc",
+    "usd_sha256": "2e37318c4dc7e03cad2710447cc8839f1d8d922536ed4587a00a9f849fe06354"
+  },
+  "schema_version": 1,
+  "source": {
+    "filename": "fidget-cube_5955b1b3-ad3e-4e13-9586-72d56821959f.blend",
+    "sha256": "1f748d5c51b76886326c9b1548e79b68f50c0d4b40dd67bf06ceb62cb75be4da"
+  }
+}

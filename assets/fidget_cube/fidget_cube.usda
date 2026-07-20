@@ -1,0 +1,35 @@
+#usda 1.0
+(
+    defaultPrim = "FidgetCube"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "FidgetCube" (
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysxRigidBodyAPI"]
+    customData = {
+        double massKg = 0.08
+        string sourceAsset = "BlenderKit Fidget Cube"
+        string sourceLicense = "royalty_free"
+    }
+    prepend references = @./fidget_cube_visual.usdc@
+)
+{
+    float physics:mass = 0.08
+    bool physics:rigidBodyEnabled = 1
+    bool physxRigidBody:enableCCD = 1
+    int physxRigidBody:solverPositionIterationCount = 16
+    int physxRigidBody:solverVelocityIterationCount = 4
+
+    def Cube "Collision" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        uniform token purpose = "guide"
+        double size = 1
+        token visibility = "invisible"
+        float3 xformOp:scale = (0.04489381, 0.045593638, 0.0456646)
+        double3 xformOp:translate = (0.0010971752926707268, -0.001801520586013794, 0.022832300147940937)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+}

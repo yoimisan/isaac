@@ -1,0 +1,89 @@
+{
+  "asset": {
+    "collision": "box_proxy",
+    "dimensions_m": [
+      0.04489381052553654,
+      0.045593637973070145,
+      0.04566460176004922
+    ],
+    "entrypoint": "fidget_cube.usda",
+    "mass_kg": 0.08,
+    "material_palette": {
+      "Color_mat": {
+        "diffuse_color_linear": [
+          0.0205989982932806,
+          0.08898137509822845,
+          0.0
+        ],
+        "matches_source": true,
+        "metallic": 0.0
+      },
+      "Cube_Color_mat": {
+        "diffuse_color_linear": [
+          0.01960664987564087,
+          0.01960664987564087,
+          0.01960664987564087
+        ],
+        "matches_source": true,
+        "metallic": 0.0
+      },
+      "Metal_mat": {
+        "diffuse_color_linear": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "matches_source": true,
+        "metallic": 1.0
+      }
+    },
+    "meters_per_unit": 1.0,
+    "name": "Fidget Cube",
+    "up_axis": "Z",
+    "visual_layer": "fidget_cube_visual.usdc"
+  },
+  "files": [
+    {
+      "bytes": 382,
+      "path": "SOURCE.md",
+      "sha256": "ac371efbcf49846e4ddf8740e147a0dcef4f53048f49165e50bcadf4c1dd42bb"
+    },
+    {
+      "bytes": 2434,
+      "path": "export_manifest.json",
+      "sha256": "8e25782ccec0084f6cac9164aef8c752d2845d3f7a31b77a2adf6a1a95caf037"
+    },
+    {
+      "bytes": 1083,
+      "path": "fidget_cube.usda",
+      "sha256": "99def37e0745911da11c89959ee11336b5ef1d515ef7d1afc2916fa7da9c2dd1"
+    },
+    {
+      "bytes": 158663,
+      "path": "fidget_cube_visual.usdc",
+      "sha256": "2e37318c4dc7e03cad2710447cc8839f1d8d922536ed4587a00a9f849fe06354"
+    },
+    {
+      "bytes": 5405562,
+      "path": "textures/Fidget_Cube_Roughness.png",
+      "sha256": "00e2704d24cdd7e23f8bb57016e514474c1aa68152f468cc95141254b71ec60e"
+    }
+  ],
+  "provenance": {
+    "author": "Klo Works",
+    "license": "royalty_free",
+    "source": "BlenderKit",
+    "source_asset_base_id": "e1548130-3cef-4cbd-bd4a-0b5b43b4f020",
+    "source_url": "https://www.blenderkit.com/asset-gallery-detail/e1548130-3cef-4cbd-bd4a-0b5b43b4f020/"
+  },
+  "schema_version": 1,
+  "validation": {
+    "all_checks_passed": true,
+    "duration_s": 3.5,
+    "isaac_sim_version": "6.0.1.0",
+    "physics_engine": "physx",
+    "physics_hz": 240,
+    "render_max_rgb": 242,
+    "render_mean_rgb": 129.00575923919678
+  }
+}
