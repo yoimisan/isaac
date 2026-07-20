@@ -1,0 +1,3 @@
+# Keep this in an environment separate from Isaac Sim. Isaac Sim 6.0.1 pins
+# NumPy 2.3.1 while LeRobot 0.6.0 requires NumPy <2.3.
+lerobot[dataset]==0.6.0
