@@ -2,18 +2,26 @@
 
 from __future__ import annotations
 
+import carb
 import numpy as np
 from isaacsim.core.api.objects import DynamicCuboid
 from isaacsim.core.utils.types import ArticulationAction
 
 from pick_place.curobo_planner import CuroboPlanner
-from pick_place.states.base import Perturbation, PickPlacePhase, PnPState, StateStep
+from pick_place.states.base import (
+    CubeCollisionMode,
+    Perturbation,
+    PickPlacePhase,
+    PnPState,
+    StateStep,
+)
 
 
 class DescendState(PnPState):
     """Move the tool center to the cube along its local approach axis."""
 
     phase = PickPlacePhase.DESCEND
+    cube_collision_mode = CubeCollisionMode.IGNORED
 
     def __init__(
         self,
@@ -30,18 +38,30 @@ class DescendState(PnPState):
 
         self._trajectory: list[ArticulationAction] | None = None
         self._trajectory_index: int | None = None
+        self._final_waypoint_hold_steps = 0
         self._planned_cube_position: np.ndarray | None = None
 
     def enter(self) -> None:
         """Discard the previous descent so the next tick plans from live state."""
         self._trajectory = None
         self._trajectory_index = None
+        self._final_waypoint_hold_steps = 0
         self._planned_cube_position = None
 
     def exit(self) -> None:
         """Drop trajectory data that must not cross the state boundary."""
         self._trajectory = None
         self._trajectory_index = None
+        self._final_waypoint_hold_steps = 0
+
+    def is_success(self) -> bool:
+        """Return whether the tool center reached the cube."""
+        tool_position, _ = self._planner.get_tool_world_pose()
+        cube_position, _ = self._cube.get_world_pose()
+        return bool(
+            np.linalg.norm(tool_position - cube_position)
+            <= self._approach_tolerance
+        )
 
     def detect_perturbation(self) -> Perturbation | None:
         """Invalidate the descent when the cube leaves its planned pose."""
@@ -60,28 +80,36 @@ class DescendState(PnPState):
         )
 
     def recovery_phase(self, perturbation: Perturbation) -> PickPlacePhase:
-        """Wait for physics to settle before reacquiring the cube."""
+        """Return directly to a fresh pre-grasp approach."""
         if perturbation.reason == "cube_moved_during_descend":
-            return PickPlacePhase.WAIT_FOR_STABLE
+            return PickPlacePhase.APPROACH
         return super().recovery_phase(perturbation)
 
     def update(self) -> StateStep:
         """Execute a constrained waypoint or advance to grasp at the cube."""
-        tool_position, tool_orientation = self._planner.get_tool_world_pose()
-        cube_position, _ = self._cube.get_world_pose()
-        if (
-            np.linalg.norm(tool_position - cube_position)
-            <= self._approach_tolerance
-        ):
+        if self.is_success():
             return StateStep(next_phase=PickPlacePhase.GRASP)
 
         if self._trajectory is None:
+            tool_position, tool_orientation = self._planner.get_tool_world_pose()
+            cube_position, _ = self._cube.get_world_pose()
             self._start_plan(tool_position, tool_orientation, cube_position)
 
-        self._trajectory_index = min(
-            self._trajectory_index,
-            len(self._trajectory) - 1,
-        )
+        if self._trajectory_index >= len(self._trajectory):
+            if (
+                self._final_waypoint_hold_steps
+                < self.max_final_waypoint_hold_steps
+            ):
+                self._final_waypoint_hold_steps += 1
+                return StateStep(action=self._trajectory[-1])
+            carb.log_warn(
+                "Descend trajectory exhausted before success; replanning."
+            )
+            self._trajectory = None
+            self._trajectory_index = None
+            self._final_waypoint_hold_steps = 0
+            return StateStep()
+
         action = self._trajectory[self._trajectory_index]
         self._trajectory_index += 1
         return StateStep(action=action)
@@ -103,8 +131,9 @@ class DescendState(PnPState):
             approach_distance=approach_distance,
             linear_axis=2,
         )
-        if self._trajectory is None:
+        if not self._trajectory:
             raise RuntimeError(
                 "CuRobo failed to generate a constrained descend trajectory."
             )
         self._trajectory_index = 0
+        self._final_waypoint_hold_steps = 0

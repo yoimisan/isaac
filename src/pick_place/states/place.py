@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import carb
 import numpy as np
 from isaacsim.core.api import World
 from isaacsim.core.api.objects import DynamicCuboid
@@ -12,6 +13,7 @@ from isaacsim.robot.manipulators.examples.franka import Franka
 from pick_place.curobo_planner import CuroboPlanner
 from pick_place.geometry import create_xform, get_cube_canonical_axes
 from pick_place.states.base import (
+    CubeCollisionMode,
     Perturbation,
     PickPlacePhase,
     PnPState,
@@ -29,6 +31,7 @@ class PlaceState(PnPState):
     """Plan and execute motion that carries the cube to the target region."""
 
     phase = PickPlacePhase.PLACE
+    cube_collision_mode = CubeCollisionMode.ATTACHED
 
     def __init__(
         self,
@@ -51,6 +54,7 @@ class PlaceState(PnPState):
 
         self._trajectory: list[ArticulationAction] | None = None
         self._trajectory_index: int | None = None
+        self._final_waypoint_hold_steps = 0
         self._target_cube_marker: SingleXFormPrim | None = None
         self._target_tool_marker: SingleXFormPrim | None = None
         self._target_cube_position: np.ndarray | None = None
@@ -62,6 +66,7 @@ class PlaceState(PnPState):
         """Discard the previous place plan and target frame."""
         self._trajectory = None
         self._trajectory_index = None
+        self._final_waypoint_hold_steps = 0
         self._target_cube_marker = None
         self._target_tool_marker = None
         self._target_cube_position = None
@@ -76,6 +81,17 @@ class PlaceState(PnPState):
             self._planner.detach_cube()
         self._trajectory = None
         self._trajectory_index = None
+        self._final_waypoint_hold_steps = 0
+
+    def is_success(self) -> bool:
+        """Return whether the cube reached the current placement target."""
+        if self._target_cube_position is None:
+            return False
+        cube_position, _ = self._cube.get_world_pose()
+        return bool(
+            np.linalg.norm(cube_position - self._target_cube_position)
+            <= self._approach_tolerance
+        )
 
     def detect_perturbation(self) -> Perturbation | None:
         """Detect a lost cube or a target that invalidated the place plan."""
@@ -109,33 +125,35 @@ class PlaceState(PnPState):
         """Re-enter place so a fresh target pose and trajectory are generated."""
         if perturbation.reason == "cube_lost_during_place":
             self._recovering_from_cube_loss = True
-            return PickPlacePhase.WAIT_FOR_STABLE
+            return PickPlacePhase.APPROACH
         if perturbation.reason == "target_moved_during_place":
             return PickPlacePhase.PLACE
         return super().recovery_phase(perturbation)
 
     def update(self) -> StateStep:
         """Execute one place waypoint or advance to release at the target."""
+        if self.is_success():
+            return StateStep(next_phase=PickPlacePhase.RELEASE)
+
         if self._trajectory is None:
             self._start_plan()
 
-        self._trajectory_index = min(
-            self._trajectory_index,
-            len(self._trajectory) - 1,
-        )
+        if self._trajectory_index >= len(self._trajectory):
+            if (
+                self._final_waypoint_hold_steps
+                < self.max_final_waypoint_hold_steps
+            ):
+                self._final_waypoint_hold_steps += 1
+                return StateStep(action=self._trajectory[-1])
+            carb.log_warn("Place trajectory exhausted before success; replanning.")
+            self._trajectory = None
+            self._trajectory_index = None
+            self._final_waypoint_hold_steps = 0
+            return StateStep()
+
         action = self._trajectory[self._trajectory_index]
         self._trajectory_index += 1
-
-        cube_position, _ = self._cube.get_world_pose()
-        if self._target_cube_position is None:
-            raise RuntimeError("Place target pose was not created before execution.")
-        next_phase = None
-        if (
-            np.linalg.norm(cube_position - self._target_cube_position)
-            <= self._approach_tolerance
-        ):
-            next_phase = PickPlacePhase.RELEASE
-        return StateStep(action=action, next_phase=next_phase)
+        return StateStep(action=action)
 
     def _start_plan(self) -> None:
         target_position, target_orientation = self._create_target_tool_pose()
@@ -143,9 +161,10 @@ class PlaceState(PnPState):
             target_position,
             target_orientation,
         )
-        if self._trajectory is None:
+        if not self._trajectory:
             raise RuntimeError("CuRobo failed to generate a place trajectory.")
         self._trajectory_index = 0
+        self._final_waypoint_hold_steps = 0
 
     def _create_target_cube_pose(
         self,

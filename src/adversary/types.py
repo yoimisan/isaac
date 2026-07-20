@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
@@ -20,6 +21,22 @@ class TaskStateView:
 
     task_name: str
     state_name: str
+
+
+@dataclass(frozen=True)
+class RigidObjectView:
+    """Simulator-independent pose snapshot for one task object."""
+
+    position: tuple[float, float, float]
+    orientation: tuple[float, float, float, float]
+
+
+@dataclass(frozen=True)
+class TaskObjectDisturbanceContext:
+    """Read-only input available to task-object disturbance policies."""
+
+    task_state: TaskStateView
+    objects: Mapping[str, RigidObjectView]
 
 
 @dataclass(frozen=True)

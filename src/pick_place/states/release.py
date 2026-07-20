@@ -9,6 +9,7 @@ from isaacsim.robot.manipulators.examples.franka import Franka
 
 from pick_place.curobo_planner import CuroboPlanner
 from pick_place.states.base import (
+    CubeCollisionMode,
     Perturbation,
     PickPlacePhase,
     PnPState,
@@ -20,6 +21,7 @@ class ReleaseState(PnPState):
     """Open the gripper and detach the cube from the CuRobo robot model."""
 
     phase = PickPlacePhase.RELEASE
+    cube_collision_mode = CubeCollisionMode.ATTACHED
 
     def __init__(
         self,
@@ -48,6 +50,18 @@ class ReleaseState(PnPState):
         if self._recovering_from_cube_loss:
             self._robot.gripper.open()
             self._planner.detach_cube()
+
+    def is_success(self) -> bool:
+        """Return whether the cube is currently at the release target."""
+        cube_position, _ = self._cube.get_world_pose()
+        target_region = self._world.scene.get_object("target_region")
+        target_position, _ = target_region.get_world_pose()
+        target_cube_position = np.asarray(target_position).copy()
+        target_cube_position[2] += self._cube.get_size() / 2.0
+        return bool(
+            np.linalg.norm(cube_position - target_cube_position)
+            <= self._placement_tolerance
+        )
 
     def detect_perturbation(self) -> Perturbation | None:
         """Detect a cube that left the target pose before release."""
@@ -81,10 +95,10 @@ class ReleaseState(PnPState):
         """Keep the grasp and generate a fresh place plan."""
         if perturbation.reason == "cube_lost_before_release":
             self._recovering_from_cube_loss = True
-            return PickPlacePhase.WAIT_FOR_STABLE
+            return PickPlacePhase.APPROACH
         if perturbation.reason == "cube_moved_before_release":
             self._recovering_from_cube_loss = True
-            return PickPlacePhase.WAIT_FOR_STABLE
+            return PickPlacePhase.APPROACH
         return super().recovery_phase(perturbation)
 
     def update(self) -> StateStep:

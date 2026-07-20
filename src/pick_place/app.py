@@ -4,21 +4,43 @@ from __future__ import annotations
 
 from isaacsim import SimulationApp
 from isaacsim.core.api import World
+from isaacsim.core.api.objects import DynamicCuboid
 
 from adversary.background import NoBackgroundDisturbance
 from adversary.executor import IsaacSimDisturbanceExecutor
 from adversary.ghost import NaughtyGhost
-from adversary.task_object import OneShotStateObjectPerturbation
-from adversary.types import TaskStateView
+from adversary.types import (
+    RigidObjectView,
+    TaskObjectDisturbanceContext,
+    TaskStateView,
+)
 from pick_place.controller import PnPController
-from pick_place.states import PickPlacePhase
+from pick_place.disturbance_policy import PickPlaceTaskObjectDisturbancePolicy
 from pick_place.task import PickPlaceTask
 
 
 _ENABLE_NAUGHTY_GHOST = True
-_NAUGHTY_TRIGGER_STATE = PickPlacePhase.APPROACH.name
-_NAUGHTY_TRIGGER_AFTER_STEPS = 30
-_NAUGHTY_CUBE_POSITION_OFFSET = (0.0, 0.08, 0.0)
+_NAUGHTY_SEED = 1
+
+
+def _observe_task_object_context(
+    controller: PnPController,
+    cube: DynamicCuboid,
+) -> TaskObjectDisturbanceContext:
+    """Build a pure-data snapshot for the PnP naughty policy."""
+    cube_position, cube_orientation = cube.get_world_pose()
+    return TaskObjectDisturbanceContext(
+        task_state=TaskStateView(
+            task_name="pick_place",
+            state_name=controller.phase.name,
+        ),
+        objects={
+            "cube": RigidObjectView(
+                position=tuple(float(value) for value in cube_position),
+                orientation=tuple(float(value) for value in cube_orientation),
+            )
+        },
+    )
 
 
 def run(simulation_app: SimulationApp) -> None:
@@ -43,11 +65,11 @@ def run(simulation_app: SimulationApp) -> None:
     naughty_ghost = NaughtyGhost(
         executor=IsaacSimDisturbanceExecutor(objects={"cube": cube}),
         background_policy=NoBackgroundDisturbance(),
-        task_object_policy=OneShotStateObjectPerturbation(
-            trigger_state=_NAUGHTY_TRIGGER_STATE,
-            trigger_after_steps=_NAUGHTY_TRIGGER_AFTER_STEPS,
+        task_object_policy=PickPlaceTaskObjectDisturbancePolicy(
             target_name="cube",
-            position_offset=_NAUGHTY_CUBE_POSITION_OFFSET,
+            workspace_x=PickPlaceTask.WORKSPACE_X,
+            workspace_y=PickPlaceTask.WORKSPACE_Y,
+            seed=_NAUGHTY_SEED,
         ),
     )
     naughty_ghost.reset()
@@ -65,10 +87,7 @@ def run(simulation_app: SimulationApp) -> None:
 
             if _ENABLE_NAUGHTY_GHOST:
                 naughty_ghost.step(
-                    TaskStateView(
-                        task_name="pick_place",
-                        state_name=controller.phase.name,
-                    )
+                    _observe_task_object_context(controller, cube)
                 )
 
             action = controller.forward()

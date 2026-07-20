@@ -8,7 +8,7 @@ from adversary.types import (
     DisturbanceChannel,
     DisturbanceCommand,
     ObjectPoseOffset,
-    TaskStateView,
+    TaskObjectDisturbanceContext,
 )
 
 
@@ -18,7 +18,10 @@ class TaskObjectDisturbancePolicy(Protocol):
     def reset(self) -> None:
         """Begin a new episode."""
 
-    def propose(self, task_state: TaskStateView) -> DisturbanceCommand | None:
+    def propose(
+        self,
+        context: TaskObjectDisturbanceContext,
+    ) -> DisturbanceCommand | None:
         """Optionally propose one task-object disturbance for this step."""
 
 
@@ -49,7 +52,11 @@ class OneShotStateObjectPerturbation:
         self._steps_in_state = 0
         self._has_fired = False
 
-    def propose(self, task_state: TaskStateView) -> DisturbanceCommand | None:
+    def propose(
+        self,
+        context: TaskObjectDisturbanceContext,
+    ) -> DisturbanceCommand | None:
+        task_state = context.task_state
         if task_state.state_name != self._active_state:
             self._active_state = task_state.state_name
             self._steps_in_state = 1

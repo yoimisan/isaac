@@ -7,7 +7,7 @@ from adversary.background import (
     NoBackgroundDisturbance,
 )
 from adversary.task_object import TaskObjectDisturbancePolicy
-from adversary.types import DisturbanceExecutor, TaskStateView
+from adversary.types import DisturbanceExecutor, TaskObjectDisturbanceContext
 
 
 class NaughtyGhost:
@@ -35,10 +35,10 @@ class NaughtyGhost:
         self._background_policy.reset()
         self._task_object_policy.reset()
 
-    def step(self, task_state: TaskStateView) -> None:
+    def step(self, context: TaskObjectDisturbanceContext) -> None:
         """Evaluate both channels and execute their proposed disturbances."""
         background_command = self._background_policy.propose(self._episode_step)
-        task_object_command = self._task_object_policy.propose(task_state)
+        task_object_command = self._task_object_policy.propose(context)
 
         for command in (background_command, task_object_command):
             if command is not None:

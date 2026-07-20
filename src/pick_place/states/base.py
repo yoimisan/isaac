@@ -14,14 +14,21 @@ class PickPlacePhase(Enum):
     """Execution phases for one pick-and-place episode."""
 
     IDLE = 0
-    WAIT_FOR_STABLE = 1
-    APPROACH = 2
-    DESCEND = 3
-    GRASP = 4
-    LIFT = 5
-    PLACE = 6
-    RELEASE = 7
-    RETURN = 8
+    APPROACH = 1
+    DESCEND = 2
+    GRASP = 3
+    LIFT = 4
+    PLACE = 5
+    RELEASE = 6
+    RETURN = 7
+
+
+class CubeCollisionMode(Enum):
+    """CuRobo collision treatment for the manipulated cube in one state."""
+
+    WORLD_OBSTACLE = "world_obstacle"
+    IGNORED = "ignored"
+    ATTACHED = "attached"
 
 
 @dataclass(frozen=True)
@@ -43,13 +50,20 @@ class StateStep:
 class PnPState(ABC):
     """One local state in the pick-and-place state machine."""
 
+    max_final_waypoint_hold_steps = 30
     phase: PickPlacePhase
+    cube_collision_mode: CubeCollisionMode
 
     def enter(self) -> None:
         """Initialize state-local execution data."""
 
     def exit(self) -> None:
         """Release state-local execution data before a transition."""
+
+    @abstractmethod
+    def is_success(self) -> bool:
+        """Return whether this state's execution goal is currently satisfied."""
+        raise NotImplementedError
 
     @abstractmethod
     def detect_perturbation(self) -> Perturbation | None:
