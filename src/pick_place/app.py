@@ -115,6 +115,10 @@ def run(
             world,
             franka,
             articulation_controller,
+            replay_objects={
+                "cube": cube,
+                "target_region": target_region,
+            },
         )
 
     naughty_ghost = None

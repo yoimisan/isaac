@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import isclose, sqrt
+from math import isclose, sqrt, pi, sin, cos
 from pathlib import Path
+
+
+DEFAULT_RENDERER = "RayTracedLighting"
+DEFAULT_TONEMAP_OP = 4
+DEFAULT_FILM_ISO = 100.0
 
 
 @dataclass(frozen=True)
@@ -85,6 +90,9 @@ def default_cameras(
 ) -> tuple[CameraConfig, ...]:
     """Return one wrist view and two symmetric external tabletop views."""
     half_sqrt_two = sqrt(0.5)
+    theta = pi / 6
+    value_sin = sin(theta/2) * half_sqrt_two
+    value_cos = cos(theta/2) * half_sqrt_two
     return (
         CameraConfig(
             name="wrist",
@@ -92,7 +100,7 @@ def default_cameras(
             translation=(0.06, 0.0, 0.035),
             # Camera -Z looks along panda_hand +Z. Image-right follows the
             # gripper's +Y opening axis and image-up follows hand +X.
-            orientation=(0.0, half_sqrt_two, half_sqrt_two, 0.0),
+            orientation=(value_sin, value_cos, value_cos, value_sin),
             resolution=resolution,
             focal_length_m=0.018,
             clipping_range=(0.01, 5.0),
@@ -123,6 +131,7 @@ class DataCollectionConfig:
     enabled: bool = False
     root: Path = Path("logs/data_collection/pnp_raw")
     fps: int = 60
+    task_id: str = "pick_place"
     task: str = "Pick up the cube and place it in the target region"
     robot_type: str = "franka"
     collection_mode: str = "clean"
@@ -130,7 +139,10 @@ class DataCollectionConfig:
     perturbation_attack_count_range: tuple[int, int] | None = None
     num_episodes: int = 1
     save_failed_episodes: bool = False
+    renderer: str = DEFAULT_RENDERER
     dlss_exec_mode: int = 2
+    tonemap_op: int = DEFAULT_TONEMAP_OP
+    film_iso: float = DEFAULT_FILM_ISO
     image_writer_threads: int = 4
     max_pending_image_writes: int = 128
     camera_warmup_max_steps: int = 10
@@ -140,6 +152,8 @@ class DataCollectionConfig:
     def __post_init__(self) -> None:
         if self.fps <= 0:
             raise ValueError(f"Data-collection fps must be positive; got {self.fps}.")
+        if not self.task_id:
+            raise ValueError("Data-collection task_id cannot be empty.")
         if self.num_episodes <= 0:
             raise ValueError(
                 "Data-collection num_episodes must be positive; "
@@ -185,6 +199,12 @@ class DataCollectionConfig:
                 "dlss_exec_mode must be 0 (Performance), 1 (Balanced), "
                 "2 (Quality), or 3 (Auto)."
             )
+        if not self.renderer:
+            raise ValueError("renderer cannot be empty.")
+        if self.tonemap_op < 0:
+            raise ValueError("tonemap_op cannot be negative.")
+        if self.film_iso <= 0.0:
+            raise ValueError("film_iso must be positive.")
         if self.image_writer_threads <= 0:
             raise ValueError("image_writer_threads must be positive.")
         if self.max_pending_image_writes <= 0:

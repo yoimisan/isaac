@@ -7,6 +7,8 @@ from pathlib import Path
 
 from isaacsim import SimulationApp
 
+from data_collection.config import DEFAULT_RENDERER
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -52,7 +54,14 @@ def _parse_args() -> argparse.Namespace:
 
 
 args = _parse_args()
-simulation_app = SimulationApp({"headless": args.headless})
+simulation_app = SimulationApp(
+    {
+        "headless": args.headless,
+        "renderer": DEFAULT_RENDERER,
+        "width": args.camera_width,
+        "height": args.camera_height,
+    }
+)
 
 
 def main() -> None:

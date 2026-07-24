@@ -42,6 +42,10 @@ The staging data preserves simulation timestamps and PnP state names for
 diagnostics. LeRobot timestamps are intentionally regenerated as
 `frame_index / fps`, as required by its fixed-rate dataset contract.
 
+Replay operates on staging episodes before export. The LeRobot exporter is a
+deterministic format conversion and already reloads and decodes its output as
+its own validation step.
+
 ## Collected features
 
 - `observation.state`: Franka's nine joint positions in `franka.dof_names`
@@ -56,6 +60,12 @@ diagnostics. LeRobot timestamps are intentionally regenerated as
 - `next.done`: true on the last frame of every exported episode.
 - `next.success`: true on the last frame of a successful episode.
 - `task`: the natural-language task instruction used by LeRobot's task index.
+
+Staging also stores `task_state` and, for newly collected episodes,
+`scene_pose`. The latter is a `[frame, object, 7]` array containing world-frame
+`[x, y, z, qw, qx, qy, qz]` poses for the objects named by
+`dataset.json.replay_objects`. These fields are replay diagnostics and are not
+currently exported as LeRobot training features.
 
 By default, only successful episodes are exported. Failed or interrupted
 episodes remain useful diagnostics and can be included explicitly.
@@ -133,10 +143,82 @@ above its minimum dimension and avoids the low-resolution warning produced by
 the previous 320 by 240 Performance-mode setup. Four PNG workers and a bounded
 128-write queue absorb the additional three-camera encoding load.
 
+Both collection and replay use explicit RayTracedLighting, a 100-intensity dome
+light, a 500-intensity distant light, and ACES tone mapping with ISO 100. Keeping
+these settings in the shared task/camera setup prevents replay comparisons from
+depending on implicit Kit lighting defaults.
+
 The first implementation requires `--record-fps` to equal the physics/control
 rate. Recording at 30 Hz while the task controller emits different commands at
 60 Hz would silently discard intermediate actions. Lower-rate datasets should
 later use an explicit action-chunk representation instead of frame decimation.
+
+## Validate and replay an episode
+
+Run the integrity pass without launching Isaac Sim:
+
+```bash
+python.sh src/replay.py \
+  --dataset-root logs/data_collection/pnp_raw \
+  --episode 0 \
+  --validate-only
+```
+
+It checks the declared frame count, array shapes, finite values, 60 Hz timestamp
+spacing, scene quaternion normalization, every expected camera filename, PNG
+decodability and resolution, and representative non-black RGB values. The JSON
+report is written beside the episode as `replay-report-action.json` unless
+`--report` is supplied.
+
+There are two simulator replay modes:
+
+- `--mode state` directly writes every recorded joint and object pose. Use it
+  for visual inspection and synchronized RGB comparison. It does not test
+  whether the recorded actions caused the motion.
+- `--mode action` sets frame zero, then applies `action[i]` before the physics
+  transition to `observation_state[i + 1]`. The report contains joint RMSE and
+  maximum absolute error, making this the control-semantic validation mode.
+
+Launch a real-time visual state replay:
+
+```bash
+python.sh src/replay.py \
+  --dataset-root logs/data_collection/pnp_raw \
+  --episode 0 \
+  --mode state
+```
+
+Run action validation headlessly and as fast as possible:
+
+```bash
+python.sh src/replay.py \
+  --dataset-root logs/data_collection/pnp_raw \
+  --episode 0 \
+  --headless \
+  --mode action \
+  --scene-mode initial \
+  --playback-speed 0
+```
+
+`--scene-mode initial` sets replay objects only at frame zero and then lets
+physics evolve, which is the strict choice for clean trajectories.
+`--scene-mode trace` corrects replay objects to their recorded poses every
+frame. Trace mode reproduces exogenous object motion in perturbed episodes and
+supports visual validation, but the report explicitly notes that this masks
+object-physics drift. RGB MAE, RMSE, PSNR, and the worst frame index are
+reported per camera; use `--image-stride` to compare a subset or
+`--no-image-compare` for joint-only validation.
+
+Episodes collected before scene-pose recording remain readable. They receive a
+warning and can validate robot actions, timing, arrays and existing RGB files,
+but cannot reproduce the original randomized cube/target poses. Collect new
+episodes under a fresh `--record-root`; the staging schema deliberately rejects
+mixing old robot-only episodes with replay-complete episodes.
+
+The shared runtime in `data_collection.replay_runtime` receives generic world,
+robot and object handles. PnP-specific scene construction lives in
+`pick_place.replay`; a future task adds its own adapter rather than changing the
+replay engine or task controller.
 
 ## Export LeRobot v3.0
 

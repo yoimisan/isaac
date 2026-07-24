@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -16,7 +17,12 @@ from data_collection.config import (
     DataCollectionConfig,
     default_cameras,
 )
-from data_collection.staging import ArticulationFrameSource, StagingEpisodeRecorder
+from data_collection.replay import StagingEpisode, validate_episode
+from data_collection.staging import (
+    ArticulationFrameSource,
+    SceneFrameSource,
+    StagingEpisodeRecorder,
+)
 
 
 class _FakeArticulationSource:
@@ -64,6 +70,14 @@ class _FakeCameraRig:
             )
             for camera in self._cameras
         }
+
+
+class _FakeSceneObject:
+    def __init__(self, position: tuple[float, float, float]) -> None:
+        self.position = np.asarray(position, dtype=np.float32)
+
+    def get_world_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        return self.position, np.asarray([1.0, 0.0, 0.0, 0.0])
 
 
 class StagingEpisodeRecorderTest(unittest.TestCase):
@@ -192,6 +206,8 @@ class StagingEpisodeRecorderTest(unittest.TestCase):
         )
         self.assertEqual(metadata["collection_mode"], "clean")
         self.assertIsNone(metadata["perturbation"])
+        self.assertEqual(metadata["rendering"]["renderer"], "RayTracedLighting")
+        self.assertEqual(metadata["rendering"]["film_iso"], 100.0)
 
     def test_metadata_records_perturbation_configuration(self) -> None:
         config = DataCollectionConfig(
@@ -215,6 +231,58 @@ class StagingEpisodeRecorderTest(unittest.TestCase):
         self.assertEqual(
             metadata["perturbation"],
             {"seed": 7, "attack_count_range": [1, 3]},
+        )
+
+    def test_scene_trace_supports_integrity_validation_and_replay(self) -> None:
+        cube = _FakeSceneObject((0.5, 0.0, 0.025))
+        target = _FakeSceneObject((0.4, 0.2, 0.002))
+        recorder = StagingEpisodeRecorder(
+            self.config,
+            articulation=_FakeArticulationSource(),
+            cameras=_FakeCameraRig(self.camera),
+            scene=SceneFrameSource({"cube": cube, "target_region": target}),
+        )
+        recorder.begin_episode(0.0)
+        recorder.record_frame(0.0, "APPROACH")
+        cube.position[1] = 0.1
+        recorder.record_frame(1.0 / 60.0, "DESCEND")
+        recorder.finish_episode(success=True, end_reason="test")
+        recorder.close()
+
+        episode = StagingEpisode.load(self.root, 0)
+        report = validate_episode(episode)
+
+        self.assertTrue(report.ok, report.errors)
+        self.assertEqual(episode.replay_object_names, ("cube", "target_region"))
+        self.assertEqual(episode.scene_pose.shape, (2, 2, 7))
+        self.assertAlmostEqual(episode.scene_pose[1, 0, 1], 0.1)
+        self.assertEqual(report.metrics["replay_objects"], ["cube", "target_region"])
+
+        invalid_timing = replace(
+            episode,
+            simulation_time=np.asarray([0.0, 0.02], dtype=np.float64),
+        )
+        timing_report = validate_episode(
+            invalid_timing,
+            verify_images=False,
+        )
+        self.assertFalse(timing_report.ok)
+        self.assertTrue(
+            any("not uniformly sampled" in error for error in timing_report.errors)
+        )
+
+    def test_robot_only_episode_reports_replay_limitation(self) -> None:
+        recorder = self._make_recorder()
+        recorder.begin_episode(0.0)
+        recorder.record_frame(0.0, "APPROACH")
+        recorder.finish_episode(success=True, end_reason="test")
+        recorder.close()
+
+        report = validate_episode(StagingEpisode.load(self.root, 0))
+
+        self.assertTrue(report.ok, report.errors)
+        self.assertTrue(
+            any("predates scene-pose" in warning for warning in report.warnings)
         )
 
 

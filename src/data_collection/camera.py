@@ -10,7 +10,11 @@ import isaacsim.core.experimental.utils.prim as prim_utils
 from isaacsim.core.experimental.utils.transform import look_at_quaternion
 from isaacsim.sensors.experimental.rtx import CameraSensor, RtxCamera
 
-from data_collection.config import CameraConfig
+from data_collection.config import (
+    DEFAULT_FILM_ISO,
+    DEFAULT_TONEMAP_OP,
+    CameraConfig,
+)
 
 
 class RgbCameraRig:
@@ -20,15 +24,20 @@ class RgbCameraRig:
         self,
         camera_configs: tuple[CameraConfig, ...],
         dlss_exec_mode: int,
+        tonemap_op: int = DEFAULT_TONEMAP_OP,
+        film_iso: float = DEFAULT_FILM_ISO,
     ) -> None:
         self._configs = camera_configs
         self._sensors: dict[str, CameraSensor] = {}
         # Quality mode is the Isaac Sim SDG recommendation and prevents DLSS
         # from rendering 640x480 products below its minimum input dimensions.
-        carb.settings.get_settings().set(
+        settings = carb.settings.get_settings()
+        settings.set(
             "rtx/post/dlss/execMode",
             dlss_exec_mode,
         )
+        settings.set("/rtx/post/tonemap/op", tonemap_op)
+        settings.set("/rtx/post/tonemap/filmIso", film_iso)
         for config in camera_configs:
             pose_arguments = self._pose_arguments(config)
             camera = RtxCamera(

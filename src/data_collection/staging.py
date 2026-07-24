@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import uuid
+from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -85,6 +86,37 @@ class ArticulationFrameSource:
         return positions, targets_array
 
 
+class SceneFrameSource:
+    """Read replay-critical world poses without depending on task internals."""
+
+    def __init__(self, objects: Mapping[str, Any]) -> None:
+        self._objects = dict(objects)
+        if not self._objects:
+            raise ValueError("At least one replay object is required.")
+
+    @property
+    def object_names(self) -> tuple[str, ...]:
+        return tuple(self._objects)
+
+    def capture(self) -> np.ndarray:
+        """Return world poses as rows of ``[x, y, z, qw, qx, qy, qz]``."""
+        poses = []
+        for name, scene_object in self._objects.items():
+            position, orientation = scene_object.get_world_pose()
+            pose = np.concatenate(
+                (
+                    np.asarray(position, dtype=np.float32),
+                    np.asarray(orientation, dtype=np.float32),
+                )
+            )
+            if pose.shape != (7,) or not np.all(np.isfinite(pose)):
+                raise RuntimeError(
+                    f"Replay object {name!r} returned an invalid pose: {pose}."
+                )
+            poses.append(pose)
+        return np.stack(poses).astype(np.float32, copy=False)
+
+
 class StagingEpisodeRecorder:
     """Record fixed-rate episodes without importing LeRobot inside Isaac Sim."""
 
@@ -93,10 +125,12 @@ class StagingEpisodeRecorder:
         config: DataCollectionConfig,
         articulation: ArticulationFrameSource,
         cameras: RgbCameraRig,
+        scene: SceneFrameSource | None = None,
     ) -> None:
         self._config = config
         self._articulation = articulation
         self._cameras = cameras
+        self._scene = scene
         self._root = config.root.expanduser().resolve()
         self._episodes_root = self._root / "episodes"
         self._writer_lock_path = self._root / ".writer.lock"
@@ -109,6 +143,7 @@ class StagingEpisodeRecorder:
         self._actions: list[np.ndarray] = []
         self._simulation_times: list[float] = []
         self._task_states: list[str] = []
+        self._scene_poses: list[np.ndarray] = []
         self._closed = False
 
         self._root.mkdir(parents=True, exist_ok=True)
@@ -155,6 +190,7 @@ class StagingEpisodeRecorder:
         self._actions = []
         self._simulation_times = []
         self._task_states = []
+        self._scene_poses = []
         self._pending_images = []
 
     def record_frame(self, simulation_time: float, task_state: str) -> bool:
@@ -180,6 +216,7 @@ class StagingEpisodeRecorder:
             )
 
         positions, targets = self._articulation.capture()
+        scene_pose = None if self._scene is None else self._scene.capture()
         frame_index = len(self._states)
         for camera in self._config.cameras:
             image_path = (
@@ -205,6 +242,8 @@ class StagingEpisodeRecorder:
         self._actions.append(targets)
         self._simulation_times.append(float(simulation_time))
         self._task_states.append(str(task_state))
+        if scene_pose is not None:
+            self._scene_poses.append(scene_pose)
         return True
 
     def finish_episode(self, *, success: bool, end_reason: str) -> Path | None:
@@ -217,18 +256,24 @@ class StagingEpisodeRecorder:
             return None
 
         self._wait_for_images()
-        np.savez(
-            self._active_dir / "data.npz",
-            observation_state=np.stack(self._states).astype(np.float32),
-            action=np.stack(self._actions).astype(np.float32),
-            simulation_time=np.asarray(self._simulation_times, dtype=np.float64),
-            task_state=np.asarray(self._task_states, dtype=np.str_),
-        )
+        arrays = {
+            "observation_state": np.stack(self._states).astype(np.float32),
+            "action": np.stack(self._actions).astype(np.float32),
+            "simulation_time": np.asarray(
+                self._simulation_times,
+                dtype=np.float64,
+            ),
+            "task_state": np.asarray(self._task_states, dtype=np.str_),
+        }
+        if self._scene is not None:
+            arrays["scene_pose"] = np.stack(self._scene_poses).astype(np.float32)
+        np.savez(self._active_dir / "data.npz", **arrays)
         _write_json(
             self._active_dir / "episode.json",
             {
                 "episode_index": self._active_index,
                 "num_frames": len(self._states),
+                "task_id": self._config.task_id,
                 "task": self._config.task,
                 "collection_mode": self._config.collection_mode,
                 "success": bool(success),
@@ -293,7 +338,14 @@ class StagingEpisodeRecorder:
             "format": _FORMAT_VERSION,
             "fps": self._config.fps,
             "dlss_exec_mode": self._config.dlss_exec_mode,
+            "rendering": {
+                "renderer": self._config.renderer,
+                "dlss_exec_mode": self._config.dlss_exec_mode,
+                "tonemap_op": self._config.tonemap_op,
+                "film_iso": self._config.film_iso,
+            },
             "robot_type": self._config.robot_type,
+            "task_id": self._config.task_id,
             "collection_mode": self._config.collection_mode,
             "perturbation": (
                 None
@@ -304,6 +356,9 @@ class StagingEpisodeRecorder:
                         self._config.perturbation_attack_count_range
                     ),
                 }
+            ),
+            "replay_objects": (
+                [] if self._scene is None else list(self._scene.object_names)
             ),
             "dof_names": list(self._articulation.dof_names),
             "features": {
@@ -424,6 +479,7 @@ class StagingEpisodeRecorder:
         self._actions = []
         self._simulation_times = []
         self._task_states = []
+        self._scene_poses = []
         self._pending_images = []
 
     def _require_open(self) -> None:

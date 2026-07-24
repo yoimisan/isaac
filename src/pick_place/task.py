@@ -8,7 +8,7 @@ from isaacsim.core.api.scenes import Scene
 from isaacsim.core.api.tasks import BaseTask
 from isaacsim.core.prims import SingleGeometryPrim
 from isaacsim.robot.manipulators.examples.franka import Franka
-from pxr import Gf, UsdGeom
+from pxr import Gf, UsdGeom, UsdLux
 
 
 class PickPlaceTask(BaseTask):
@@ -34,6 +34,18 @@ class PickPlaceTask(BaseTask):
         """Add the ground, target region, cube, and Franka to the scene."""
         super().set_up_scene(scene)
         scene.add_default_ground_plane()
+
+        UsdGeom.Scope.Define(scene.stage, "/World/Lights")
+        dome_light = UsdLux.DomeLight.Define(
+            scene.stage,
+            "/World/Lights/Dome",
+        )
+        dome_light.CreateIntensityAttr(100.0)
+        distant_light = UsdLux.DistantLight.Define(
+            scene.stage,
+            "/World/Lights/Distant",
+        )
+        distant_light.CreateIntensityAttr(500.0)
 
         target_prim = UsdGeom.Cube.Define(scene.stage, "/World/TargetRegion")
         target_prim.CreateSizeAttr(1.0)
@@ -97,4 +109,3 @@ class PickPlaceTask(BaseTask):
             )
             if min_distance_from is None or np.linalg.norm(xy - min_distance_from) >= self.MIN_CUBE_TARGET_DISTANCE:
                 return xy
-

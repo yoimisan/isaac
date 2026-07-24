@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import carb
@@ -10,7 +11,11 @@ from isaacsim.core.api import World
 
 from data_collection.camera import RgbCameraRig
 from data_collection.config import DataCollectionConfig
-from data_collection.staging import ArticulationFrameSource, StagingEpisodeRecorder
+from data_collection.staging import (
+    ArticulationFrameSource,
+    SceneFrameSource,
+    StagingEpisodeRecorder,
+)
 
 
 class DataCollectionRuntime:
@@ -22,12 +27,15 @@ class DataCollectionRuntime:
         world: World,
         robot: Any,
         articulation_controller: Any,
+        replay_objects: Mapping[str, Any] | None = None,
     ) -> None:
         self._config = config
         self._validate_recording_rate(world)
         self._cameras = RgbCameraRig(
             config.cameras,
             dlss_exec_mode=config.dlss_exec_mode,
+            tonemap_op=config.tonemap_op,
+            film_iso=config.film_iso,
         )
         try:
             self._recorder = StagingEpisodeRecorder(
@@ -37,6 +45,11 @@ class DataCollectionRuntime:
                     articulation_controller,
                 ),
                 cameras=self._cameras,
+                scene=(
+                    None
+                    if replay_objects is None
+                    else SceneFrameSource(replay_objects)
+                ),
             )
             self._warm_up_cameras(world)
         except Exception:
