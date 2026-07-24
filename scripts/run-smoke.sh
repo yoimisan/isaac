@@ -6,29 +6,16 @@ MODE=${2:-1}
 LOG_DIR="logs/data_collection"
 RECORD_ROOT="data/tmp/smoke_clean"
 
+
+PROJECT_DIR=$(cd -- $(dirname $(dirname -- "${BASH_SOURCE[0]}")) && pwd)
+source ${PROJECT_DIR}/scripts/utils.sh
+
 pre_clean () {
     mkdir -p ${LOG_DIR}
     if [[ -e ${RECORD_ROOT} ]]; then
         echo "${RECORD_ROOT} exists, delete."
         rm -rf ${RECORD_ROOT}
     fi
-}
-
-_execute () {
-    local device_id=${1}
-    local log_dir=${2}
-    local episode_num=${3}
-
-    CUDA_VISIBLE_DEVICES=${device_id} python src/pnp.py \
-    --headless \
-    --record \
-    --record-root ${log_dir} \
-    --record-episodes ${episode_num} \
-    --record-fps 60 \
-    --/renderer/multiGpu/enabled=false \
-    --/renderer/multiGpu/maxGpuCount=1 \
-    --/renderer/activeGpu=${device_id} \
-    --/physics/cudaDevice=0
 }
 
 run_single () {
